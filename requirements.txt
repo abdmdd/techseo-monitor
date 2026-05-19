@@ -1,0 +1,14 @@
+streamlit
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+celery
+redis
+requests
+python-dotenv
+pandas
+beautifulsoup4
+lxml
+playwright
+reportlab
