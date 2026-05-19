@@ -22,10 +22,11 @@ from services.ai_service import generate_ai_recommendations, generate_ai_summary
 from services.audit_service import run_monthly_audit
 from services.history_service import save_audit_history
 from services.score_service import get_score_risk
+from views.auth_page import require_user_id
 
 
 def select_site_from_db(label):
-    sites = get_sites()
+    sites = get_sites(user_id=require_user_id())
 
     if sites:
         site_options = {
@@ -84,7 +85,8 @@ def show_monthly_audit_page():
             audit_type="Ежемесячный аудит",
             result=result,
             score=score,
-            errors_count=errors_count
+            errors_count=errors_count,
+            user_id=require_user_id()
         )
 
         ai_summary = generate_ai_summary(score, errors_count)

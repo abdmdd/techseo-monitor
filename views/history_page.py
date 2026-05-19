@@ -3,6 +3,7 @@ import streamlit as st
 
 from components.ui_helpers import metric_card, page_header
 from database.db import get_audit_history
+from views.auth_page import require_user_id
 
 
 def show_history_page():
@@ -11,7 +12,7 @@ def show_history_page():
         "Сохраненные проверки, динамика score и количество найденных ошибок."
     )
 
-    history = get_audit_history()
+    history = get_audit_history(user_id=require_user_id())
 
     if not history:
         st.info("История аудитов пока пуста.")

@@ -11,23 +11,24 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ==================================================
-# DATABASE
+# DATABASE / UI
 # ==================================================
 
-from database.db import init_db
 from components.ui_helpers import apply_global_styles
+from database.db import init_db
 
 # ==================================================
 # VIEWS
 # ==================================================
 
+from views.auth_page import get_current_user, init_auth_state, logout, show_auth_page
 from views.dashboard_page import show_dashboard
-from views.sites_page import show_sites_page
-from views.monthly_audit_page import show_monthly_audit_page
-from views.quarterly_audit_page import show_quarterly_audit_page
 from views.history_page import show_history_page
 from views.meta_generator_page import show_meta_generator_page
+from views.monthly_audit_page import show_monthly_audit_page
+from views.quarterly_audit_page import show_quarterly_audit_page
 from views.reports_page import show_reports_page
+from views.sites_page import show_sites_page
 
 # ==================================================
 # INIT
@@ -47,10 +48,17 @@ st.set_page_config(
 )
 
 # ==================================================
-# GLOBAL UI
+# GLOBAL UI / AUTH GATE
 # ==================================================
 
 apply_global_styles()
+init_auth_state()
+
+if not get_current_user():
+    show_auth_page()
+    st.stop()
+
+current_user = get_current_user()
 
 # ==================================================
 # HEADER
@@ -67,6 +75,12 @@ st.markdown(
 # ==================================================
 
 st.sidebar.markdown("## Навигация")
+st.sidebar.caption(f"Вы вошли как {current_user['email']}")
+
+if st.sidebar.button("Выйти", use_container_width=True):
+    logout()
+
+st.sidebar.divider()
 st.sidebar.caption("Основные рабочие разделы MVP")
 
 menu = st.sidebar.radio(
@@ -85,7 +99,7 @@ menu = st.sidebar.radio(
 )
 
 st.sidebar.divider()
-st.sidebar.caption("TechSEO Monitor • версия для диплома")
+st.sidebar.caption("TechSEO Monitor - версия для диплома")
 
 # ==================================================
 # ROUTING

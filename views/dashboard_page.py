@@ -4,6 +4,7 @@ import streamlit as st
 from components.ui_helpers import compact_note, metric_card, page_header, risk_card
 from database.db import get_audit_history, get_sites
 from services.score_service import get_score_risk
+from views.auth_page import require_user_id
 
 
 def show_dashboard():
@@ -12,8 +13,9 @@ def show_dashboard():
         "Общий мониторинг технического SEO: динамика, последние аудиты и текущий риск."
     )
 
-    sites = get_sites()
-    history = get_audit_history()
+    user_id = require_user_id()
+    sites = get_sites(user_id=user_id)
+    history = get_audit_history(user_id=user_id)
 
     sites_count = len(sites)
     audits_count = len(history)

@@ -2,9 +2,12 @@ import pandas as pd
 import streamlit as st
 
 from database.db import add_site, get_sites
+from views.auth_page import require_user_id
 
 
 def show_sites_page():
+    user_id = require_user_id()
+
     st.header("Мои сайты")
 
     st.write("Добавление и хранение сайтов для мониторинга.")
@@ -62,14 +65,15 @@ def show_sites_page():
                     google_property,
                     yandex_reviews_url,
                     google_reviews_url,
-                    twogis_reviews_url
+                    twogis_reviews_url,
+                    user_id=user_id
                 )
                 st.success(f"Сайт добавлен: {site_name}")
 
     st.divider()
     st.subheader("Список сайтов")
 
-    sites = get_sites()
+    sites = get_sites(user_id=user_id)
 
     if sites:
         df = pd.DataFrame(

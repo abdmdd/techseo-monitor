@@ -22,10 +22,11 @@ from services.audit_service import run_quarterly_audit
 from services.history_service import save_audit_history
 from services.report_service import generate_report_summary
 from services.score_service import get_score_risk
+from views.auth_page import require_user_id
 
 
 def select_site_from_db(label):
-    sites = get_sites()
+    sites = get_sites(user_id=require_user_id())
 
     if sites:
         site_options = {
@@ -81,7 +82,8 @@ def show_quarterly_audit_page():
             audit_type="Ежеквартальный аудит",
             result=result,
             score=score,
-            errors_count=errors_count
+            errors_count=errors_count,
+            user_id=require_user_id()
         )
 
         st.success("Ежеквартальный аудит завершен и сохранен в историю")
