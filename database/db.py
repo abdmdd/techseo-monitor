@@ -54,6 +54,12 @@ def migrate_sites_unique_url(cursor):
             yandex_reviews_url TEXT,
             google_reviews_url TEXT,
             twogis_reviews_url TEXT,
+            yandex_webmaster_connected INTEGER DEFAULT 0,
+            yandex_webmaster_token TEXT,
+            yandex_webmaster_connected_at TIMESTAMP,
+            yandex_metrika_connected INTEGER DEFAULT 0,
+            yandex_metrika_token TEXT,
+            yandex_metrika_connected_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
@@ -71,6 +77,12 @@ def migrate_sites_unique_url(cursor):
         "yandex_reviews_url",
         "google_reviews_url",
         "twogis_reviews_url",
+        "yandex_webmaster_connected",
+        "yandex_webmaster_token",
+        "yandex_webmaster_connected_at",
+        "yandex_metrika_connected",
+        "yandex_metrika_token",
+        "yandex_metrika_connected_at",
         "created_at"
     ]
     copy_columns = [column for column in target_columns if column in legacy_columns]
@@ -107,6 +119,12 @@ def init_db():
             yandex_reviews_url TEXT,
             google_reviews_url TEXT,
             twogis_reviews_url TEXT,
+            yandex_webmaster_connected INTEGER DEFAULT 0,
+            yandex_webmaster_token TEXT,
+            yandex_webmaster_connected_at TIMESTAMP,
+            yandex_metrika_connected INTEGER DEFAULT 0,
+            yandex_metrika_token TEXT,
+            yandex_metrika_connected_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
@@ -142,7 +160,13 @@ def init_db():
     columns_to_add = [
         ("yandex_reviews_url", "TEXT"),
         ("google_reviews_url", "TEXT"),
-        ("twogis_reviews_url", "TEXT")
+        ("twogis_reviews_url", "TEXT"),
+        ("yandex_webmaster_connected", "INTEGER DEFAULT 0"),
+        ("yandex_webmaster_token", "TEXT"),
+        ("yandex_webmaster_connected_at", "TIMESTAMP"),
+        ("yandex_metrika_connected", "INTEGER DEFAULT 0"),
+        ("yandex_metrika_token", "TEXT"),
+        ("yandex_metrika_connected_at", "TIMESTAMP")
     ]
 
     cursor.execute("PRAGMA table_info(sites)")
@@ -284,6 +308,143 @@ def get_sites(user_id=None):
     conn.close()
 
     return rows
+
+
+def get_site_by_id(site_id, user_id=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            id,
+            user_id,
+            name,
+            url,
+            yandex_host,
+            google_property,
+            yandex_reviews_url,
+            google_reviews_url,
+            twogis_reviews_url,
+            yandex_webmaster_connected,
+            yandex_webmaster_token,
+            yandex_webmaster_connected_at,
+            yandex_metrika_connected,
+            yandex_metrika_token,
+            yandex_metrika_connected_at,
+            created_at
+        FROM sites
+        WHERE id = ?
+    """
+    params = [site_id]
+
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+
+    cursor.execute(query, tuple(params))
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+
+def connect_yandex_webmaster(site_id, token, user_id=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        UPDATE sites
+        SET
+            yandex_webmaster_connected = 1,
+            yandex_webmaster_token = ?,
+            yandex_webmaster_connected_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """
+    params = [token, site_id]
+
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+
+    cursor.execute(query, tuple(params))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
+
+def disconnect_yandex_webmaster(site_id, user_id=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        UPDATE sites
+        SET
+            yandex_webmaster_connected = 0,
+            yandex_webmaster_token = NULL,
+            yandex_webmaster_connected_at = NULL
+        WHERE id = ?
+    """
+    params = [site_id]
+
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+
+    cursor.execute(query, tuple(params))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
+
+def connect_yandex_metrika(site_id, token, user_id=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        UPDATE sites
+        SET
+            yandex_metrika_connected = 1,
+            yandex_metrika_token = ?,
+            yandex_metrika_connected_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """
+    params = [token, site_id]
+
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+
+    cursor.execute(query, tuple(params))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
+
+def disconnect_yandex_metrika(site_id, user_id=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        UPDATE sites
+        SET
+            yandex_metrika_connected = 0,
+            yandex_metrika_token = NULL,
+            yandex_metrika_connected_at = NULL
+        WHERE id = ?
+    """
+    params = [site_id]
+
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+
+    cursor.execute(query, tuple(params))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
 
 
 def save_audit_result(

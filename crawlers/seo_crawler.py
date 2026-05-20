@@ -1,7 +1,8 @@
 import logging
 import os
 import xml.etree.ElementTree as ET
-from urllib.parse import urljoin, urlparse
+from collections import deque
+from urllib.parse import parse_qsl, urlencode, urldefrag, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -19,6 +20,8 @@ PLAYWRIGHT_TIMEOUT = int(os.getenv("PLAYWRIGHT_TIMEOUT", "45000"))
 MAX_SITEMAP_URLS = 200
 MAX_SITEMAP_BYTES = 5 * 1024 * 1024
 MAX_REDIRECT_HOPS = 10
+FULL_CRAWL_MAX_PAGES = int(os.getenv("FULL_CRAWL_MAX_PAGES", "30"))
+FULL_CRAWL_MAX_LINKS_PER_PAGE = int(os.getenv("FULL_CRAWL_MAX_LINKS_PER_PAGE", "250"))
 
 
 # ==================================================
@@ -55,6 +58,54 @@ def is_internal_link(base_url, link_url):
 
 def clean_url(url):
     return url.split("#")[0].strip()
+
+
+def normalize_url(url, base_url=""):
+    if not url:
+        return ""
+
+    raw_url = str(url).strip()
+    lowered = raw_url.lower()
+
+    if lowered.startswith(("mailto:", "tel:", "javascript:", "data:", "sms:", "whatsapp:")):
+        return ""
+
+    joined_url = urljoin(base_url, raw_url) if base_url else raw_url
+    joined_url, _ = urldefrag(joined_url)
+    parsed = urlparse(joined_url)
+
+    if parsed.scheme not in ["http", "https"] or not parsed.netloc:
+        return ""
+
+    scheme = parsed.scheme.lower()
+    netloc = parsed.netloc.lower()
+
+    if netloc.endswith(":80") and scheme == "http":
+        netloc = netloc[:-3]
+    elif netloc.endswith(":443") and scheme == "https":
+        netloc = netloc[:-4]
+
+    path = parsed.path or "/"
+
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    query = urlencode(sorted(query_pairs), doseq=True)
+
+    return urlunparse((scheme, netloc, path, "", query, ""))
+
+
+def should_crawl_url(url, base_url):
+    normalized_url = normalize_url(url, base_url)
+
+    if not normalized_url:
+        return ""
+
+    if not is_internal_link(base_url, normalized_url):
+        return ""
+
+    return normalized_url
 
 
 def response_status_label(response):
@@ -257,6 +308,13 @@ def parse_page_meta(page_url, html):
         else ""
     )
 
+    meta_robots_tag = soup.find("meta", attrs={"name": "robots"})
+    meta_robots = (
+        meta_robots_tag.get("content", "").strip()
+        if meta_robots_tag and meta_robots_tag.get("content")
+        else ""
+    )
+
     h1_tags = soup.find_all("h1")
     h1_list = [h.get_text(strip=True) for h in h1_tags]
     viewport = soup.find("meta", attrs={"name": "viewport"})
@@ -299,12 +357,17 @@ def parse_page_meta(page_url, html):
         "title": title,
         "description": description,
         "canonical": canonical,
+        "meta_robots": meta_robots,
         "h1_list": h1_list,
         "h1_count": len(h1_list),
         "mobile_friendly": viewport is not None,
         "body_empty": body is None or not body.get_text(strip=True),
         "images_total": len(images),
         "images_without_alt_list": images_without_alt_list,
+        "image_alt_coverage": (
+            round(((len(images) - len(images_without_alt_list)) / len(images)) * 100, 1)
+            if images else 100
+        ),
         "links": found_links
     }
 
@@ -447,6 +510,257 @@ def analyze_main_page(url, headers, results):
     results["links_total"] = len(meta["links"])
 
     return meta
+
+
+# ==================================================
+# FULL WEBSITE CRAWL
+# ==================================================
+
+def build_redirect_chain_from_response(response):
+    chain = []
+
+    for history_response in response.history:
+        chain.append({
+            "url": history_response.url,
+            "status": history_response.status_code,
+            "location": history_response.headers.get("Location", "")
+        })
+
+    chain.append({
+        "url": response.url,
+        "status": response.status_code,
+        "location": ""
+    })
+
+    return chain
+
+
+def page_record_from_response(page_url, response, html):
+    meta = parse_page_meta(page_url, html)
+    first_h1 = meta["h1_list"][0] if meta["h1_list"] else ""
+    internal_links = []
+
+    return {
+        "url": page_url,
+        "final_url": response.url,
+        "status_code": response.status_code,
+        "title": meta["title"],
+        "description": meta["description"],
+        "h1": first_h1,
+        "h1_count": meta["h1_count"],
+        "canonical": meta["canonical"],
+        "meta_robots": meta["meta_robots"],
+        "images_total": meta["images_total"],
+        "images_without_alt": len(meta["images_without_alt_list"]),
+        "image_alt_coverage": meta["image_alt_coverage"],
+        "internal_links": internal_links,
+        "internal_links_count": 0,
+        "redirect_chain": build_redirect_chain_from_response(response),
+        "content_type": response.headers.get("Content-Type", "")
+    }, meta
+
+
+def collect_page_issues(page, results):
+    url = page["url"]
+
+    if page["status_code"] >= 400:
+        results["broken_links"].append({
+            "url": url,
+            "status_code": page["status_code"],
+            "found_on": "crawler"
+        })
+
+    if 300 <= page["status_code"] < 400:
+        return
+
+    if not page["title"]:
+        results["errors"].append(f"Missing Title: {url}")
+
+    if not page["description"]:
+        results["errors"].append(f"Missing Description: {url}")
+
+    if not page["h1"]:
+        results["errors"].append(f"Missing H1: {url}")
+
+    if not page["canonical"]:
+        results["errors"].append(f"Missing canonical: {url}")
+
+    if page["images_total"] and page["image_alt_coverage"] < 100:
+        results["errors"].append(f"Images without alt on {url}: {page['images_without_alt']}")
+
+
+def update_full_crawl_reports(results, crawled_pages, redirect_chains):
+    title_map = {}
+    description_map = {}
+    canonical_report = []
+    pages_meta = []
+
+    for page in crawled_pages:
+        pages_meta.append({
+            "url": page["url"],
+            "status_code": page["status_code"],
+            "title": page["title"],
+            "description": page["description"],
+            "h1": page["h1"],
+            "h1_count": page["h1_count"],
+            "canonical": page["canonical"],
+            "meta_robots": page["meta_robots"],
+            "image_alt_coverage": page["image_alt_coverage"],
+            "internal_links_count": page["internal_links_count"]
+        })
+
+        canonical_report.append({
+            "url": page["url"],
+            "canonical": page["canonical"],
+            "status": "present" if page["canonical"] else "missing"
+        })
+
+        normalized_title = normalize_meta_text(page["title"])
+        normalized_description = normalize_meta_text(page["description"])
+
+        if normalized_title:
+            title_map.setdefault(normalized_title, {
+                "text": page["title"],
+                "urls": []
+            })
+            title_map[normalized_title]["urls"].append(page["url"])
+
+        if normalized_description:
+            description_map.setdefault(normalized_description, {
+                "text": page["description"],
+                "urls": []
+            })
+            description_map[normalized_description]["urls"].append(page["url"])
+
+    results["crawled_pages"] = crawled_pages
+    results["crawled_pages_count"] = len(crawled_pages)
+    results["pages_meta"] = pages_meta
+    results["canonical_report"] = canonical_report
+    results["redirect_chains"] = redirect_chains
+    results["broken_links_total"] = len(results["broken_links"])
+    results["internal_links_total"] = sum(page["internal_links_count"] for page in crawled_pages)
+
+    results["duplicate_titles"] = {
+        item["text"]: item["urls"]
+        for item in title_map.values()
+        if len(item["urls"]) > 1
+    }
+    results["duplicate_descriptions"] = {
+        item["text"]: item["urls"]
+        for item in description_map.values()
+        if len(item["urls"]) > 1
+    }
+
+    if results["duplicate_titles"]:
+        results["errors"].append(f"Duplicate titles found: {len(results['duplicate_titles'])}")
+
+    if results["duplicate_descriptions"]:
+        results["errors"].append(f"Duplicate descriptions found: {len(results['duplicate_descriptions'])}")
+
+
+def crawl_website(start_url, headers, results, max_pages=FULL_CRAWL_MAX_PAGES):
+    normalized_start_url = normalize_url(start_url)
+    base_url = get_base_url(normalized_start_url)
+
+    if not normalized_start_url or not base_url:
+        results["errors"].append("Invalid start URL for full crawl")
+        return []
+
+    queue = deque([normalized_start_url])
+    queued = {normalized_start_url}
+    source_by_url = {normalized_start_url: normalized_start_url}
+    visited = set()
+    crawled_pages = []
+    redirect_chains = []
+
+    while queue and len(visited) < max_pages:
+        current_url = queue.popleft()
+        queued.discard(current_url)
+
+        if current_url in visited:
+            continue
+
+        visited.add(current_url)
+        response, error = safe_get(
+            current_url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True
+        )
+
+        if error:
+            results["broken_links"].append({
+                "url": current_url,
+                "status_code": error,
+                "found_on": source_by_url.get(current_url, "crawler")
+            })
+            add_warning(results, f"Full crawl skipped {current_url}: {error}")
+            continue
+
+        redirect_chain = build_redirect_chain_from_response(response)
+
+        if len(redirect_chain) > 1:
+            redirect_chains.append({
+                "url": current_url,
+                "chain": redirect_chain,
+                "status": redirect_chain[0]["status"],
+                "location": redirect_chain[0]["location"]
+            })
+
+        if response.status_code >= 400:
+            results["broken_links"].append({
+                "url": current_url,
+                "status_code": response.status_code,
+                "found_on": source_by_url.get(current_url, "crawler")
+            })
+            continue
+
+        content_type = response.headers.get("Content-Type", "").lower()
+
+        if "text/html" not in content_type and content_type:
+            continue
+
+        try:
+            html = response.text or ""
+            page, meta = page_record_from_response(current_url, response, html)
+        except Exception as exc:
+            add_warning(results, f"Full crawl HTML parse failed for {current_url}: {exc}")
+            continue
+
+        page_internal_links = []
+
+        for link_url in meta.get("links", [])[:FULL_CRAWL_MAX_LINKS_PER_PAGE]:
+            normalized_link = should_crawl_url(link_url, base_url)
+
+            if not normalized_link:
+                continue
+
+            page_internal_links.append(normalized_link)
+
+            if normalized_link not in visited and normalized_link not in queued and len(visited) + len(queue) < max_pages:
+                queue.append(normalized_link)
+                queued.add(normalized_link)
+                source_by_url[normalized_link] = current_url
+
+        page["internal_links"] = sorted(set(page_internal_links))
+        page["internal_links_count"] = len(page["internal_links"])
+        crawled_pages.append(page)
+        collect_page_issues(page, results)
+
+    if queue:
+        add_warning(results, f"Full crawl reached max_pages={max_pages}; remaining queue={len(queue)}")
+
+    update_full_crawl_reports(results, crawled_pages, redirect_chains)
+    results["full_crawl"] = {
+        "enabled": True,
+        "start_url": normalized_start_url,
+        "base_url": base_url,
+        "max_pages": max_pages,
+        "visited_urls_count": len(visited),
+        "queued_urls_remaining": len(queue)
+    }
+
+    return crawled_pages
 
 
 # ==================================================
@@ -778,7 +1092,9 @@ def create_initial_results(url):
         "broken_links_total": 0,
         "broken_links": [],
         "pages_meta": [],
+        "crawled_pages": [],
         "crawled_pages_count": 0,
+        "canonical_report": [],
         "duplicate_titles": {},
         "duplicate_descriptions": {},
         "pagination_status": "Не проверено",
@@ -786,6 +1102,15 @@ def create_initial_results(url):
         "pagination_pages": [],
         "pagination_errors": [],
         "homepage_redirects": [],
+        "redirect_chains": [],
+        "full_crawl": {
+            "enabled": False,
+            "start_url": url,
+            "base_url": "",
+            "max_pages": FULL_CRAWL_MAX_PAGES,
+            "visited_urls_count": 0,
+            "queued_urls_remaining": 0
+        },
         "main_page_fetch_source": "not_started",
         "crawler_warnings": [],
         "errors": [],
@@ -794,13 +1119,13 @@ def create_initial_results(url):
 
 
 def check_technical_seo(url: str):
-    url = (url or "").strip()
+    url = normalize_url((url or "").strip())
     results = create_initial_results(url)
     base_url = get_base_url(url)
 
     if not base_url:
-        results["errors"].append("Некорректный URL сайта")
-        results["recommendations"].append("Укажите полный URL с http:// или https://.")
+        results["errors"].append("Invalid website URL")
+        results["recommendations"].append("Use a full URL with http:// or https://.")
         return results
 
     headers = {
@@ -840,6 +1165,19 @@ def check_technical_seo(url: str):
         results["errors"].append(f"Ошибка анализа sitemap.xml: {exc}")
         add_warning(results, f"Sitemap analysis failed for {base_url}: {exc}")
 
+    full_crawl_pages = []
+
+    try:
+        full_crawl_pages = crawl_website(
+            start_url=url,
+            headers=headers,
+            results=results,
+            max_pages=FULL_CRAWL_MAX_PAGES
+        )
+    except Exception as exc:
+        results["errors"].append(f"Full crawl failed: {exc}")
+        add_warning(results, f"Full crawl failed for {base_url}: {exc}")
+
     if sitemap_urls:
         extra_urls = [
             base_url,
@@ -850,15 +1188,16 @@ def check_technical_seo(url: str):
 
         sitemap_urls = list(dict.fromkeys(extra_urls + sitemap_urls))
 
-        try:
-            analyze_duplicate_meta(
-                sitemap_urls,
-                headers,
-                results
-            )
-        except Exception as exc:
-            results["errors"].append(f"Ошибка анализа дублей meta: {exc}")
-            add_warning(results, f"Duplicate meta analysis failed for {base_url}: {exc}")
+        if not full_crawl_pages:
+            try:
+                analyze_duplicate_meta(
+                    sitemap_urls,
+                    headers,
+                    results
+                )
+            except Exception as exc:
+                results["errors"].append(f"Ошибка анализа дублей meta: {exc}")
+                add_warning(results, f"Duplicate meta analysis failed for {base_url}: {exc}")
 
         try:
             analyze_pagination(
@@ -872,17 +1211,18 @@ def check_technical_seo(url: str):
             results["errors"].append(f"Ошибка анализа пагинации: {exc}")
             add_warning(results, f"Pagination analysis failed for {base_url}: {exc}")
 
-    try:
-        analyze_broken_links(
-            base_url=base_url,
-            page_links=main_meta.get("links", []),
-            headers=headers,
-            results=results,
-            max_links=150
-        )
-    except Exception as exc:
-        results["errors"].append(f"Ошибка анализа битых ссылок: {exc}")
-        add_warning(results, f"Broken links analysis failed for {base_url}: {exc}")
+    if not full_crawl_pages:
+        try:
+            analyze_broken_links(
+                base_url=base_url,
+                page_links=main_meta.get("links", []),
+                headers=headers,
+                results=results,
+                max_links=150
+            )
+        except Exception as exc:
+            results["errors"].append(f"Ошибка анализа битых ссылок: {exc}")
+            add_warning(results, f"Broken links analysis failed for {base_url}: {exc}")
 
     try:
         analyze_homepage_redirects(

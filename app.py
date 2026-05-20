@@ -22,6 +22,7 @@ from database.db import init_db
 # ==================================================
 
 from views.auth_page import get_current_user, init_auth_state, logout, show_auth_page
+from views.competitors_page import show_competitors_page
 from views.dashboard_page import show_dashboard
 from views.history_page import show_history_page
 from views.meta_generator_page import show_meta_generator_page
@@ -91,6 +92,7 @@ menu = st.sidebar.radio(
         "Ежемесячный аудит",
         "Ежеквартальный аудит",
         "Генерация мета-тегов",
+        "Конкуренты",
         "История проверок",
         "PDF-отчеты",
         "Настройки"
@@ -115,6 +117,8 @@ elif menu == "Ежеквартальный аудит":
     show_quarterly_audit_page()
 elif menu == "Генерация мета-тегов":
     show_meta_generator_page()
+elif menu == "Конкуренты":
+    show_competitors_page()
 elif menu == "История проверок":
     show_history_page()
 elif menu == "PDF-отчеты":
