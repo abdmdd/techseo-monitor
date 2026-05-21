@@ -516,6 +516,20 @@ def get_user_by_id(user_id):
     return row
 
 
+def update_user_password_hash(user_id, password_hash):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users
+        SET password_hash = ?
+        WHERE id = ?
+    """, (password_hash, user_id))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
+
 def create_auth_session(user_id, token):
     conn = get_connection()
     cursor = conn.cursor()

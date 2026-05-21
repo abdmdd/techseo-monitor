@@ -2,6 +2,8 @@ from html import escape
 
 import streamlit as st
 
+from services.ai_service import correct_text_with_yandexgpt, generate_meta_variants, yandex_gpt_available
+
 
 def section_header(title, subtitle):
     st.markdown(
@@ -11,7 +13,7 @@ def section_header(title, subtitle):
             <div class="ts-section-subtitle">{escape(subtitle)}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
 
@@ -24,7 +26,7 @@ def ai_feature_card(icon, title, text):
             <div class="ts-card-text">{escape(text)}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
 
@@ -36,34 +38,14 @@ def output_block(label, text):
             <div class="ts-ai-output-text">{escape(text)}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-
-
-def generate_mock_meta(topic, url):
-    clean_topic = topic.strip() or "SEO аудит сайта"
-    clean_url = url.strip() or "https://example.ru"
-
-    return {
-        "titles": [
-            f"{clean_topic}: технический SEO-аудит и рост видимости",
-            f"Проверка SEO для {clean_topic} - ошибки, индексация, рекомендации",
-            f"🚀 {clean_topic}: быстрый SEO-анализ и план улучшений",
-            f"{clean_topic} | Полный аудит сайта и поисковых факторов",
-        ],
-        "descriptions": [
-            f"Проверьте {clean_topic.lower()} на технические ошибки, индексацию, meta tags, redirects и broken links. Получите понятный SEO-план.",
-            f"SEO-анализ страницы {clean_url}: title, description, H1, canonical, sitemap, robots и рекомендации для роста органики.",
-            f"✨ Улучшите {clean_topic.lower()} с помощью AI-рекомендаций, crawler-сигналов и понятного списка приоритетов.",
-            f"Короткий аудит {clean_topic.lower()}: находим ошибки, объясняем риски и подсказываем, что исправить в первую очередь.",
-        ],
-    }
 
 
 def show_meta_generator():
     section_header(
         "Генератор meta-тегов",
-        "Создавайте SEO title, description, короткие, длинные и более выразительные варианты."
+        "YandexGPT генерирует SEO title и description: короткие, длинные, balanced и emoji-варианты.",
     )
 
     col1, col2 = st.columns(2)
@@ -76,21 +58,26 @@ def show_meta_generator():
     tone = st.segmented_control(
         "Тип варианта",
         ["Короткий", "Длинный", "С emoji", "Сбалансированный"],
-        default="Сбалансированный"
+        default="Сбалансированный",
     )
 
     if st.button("Сгенерировать варианты meta", type="primary", use_container_width=True):
-        result = generate_mock_meta(topic, url)
-        st.session_state.ai_meta_result = {
-            "tone": tone,
-            **result
-        }
+        with st.spinner("Генерируем варианты через YandexGPT..."):
+            st.session_state.ai_meta_result = {
+                "tone": tone,
+                **generate_meta_variants(topic, url, tone),
+            }
 
     result = st.session_state.get("ai_meta_result")
 
     if not result:
-        st.info("Укажите тему и URL, затем сгенерируйте демо-варианты. Реальная AI-генерация будет подключена позже.")
+        st.info("Укажите тему и URL, затем запустите генерацию. Если YandexGPT недоступен, платформа покажет fallback-варианты.")
         return
+
+    if result.get("ok"):
+        st.success(result.get("message", "Сгенерировано через YandexGPT."))
+    else:
+        st.warning(result.get("message", "YandexGPT недоступен, показан fallback."))
 
     title_col, description_col = st.columns(2)
 
@@ -110,113 +97,108 @@ def show_meta_generator():
 def show_prompt_generator():
     section_header(
         "Генератор промптов",
-        "Готовьте промпты для визуальных SEO-задач, скриншотов страниц и творческих брифов."
+        "Подготовка промптов для визуальных SEO-задач, скриншотов страниц и креативных брифов.",
     )
 
     uploaded = st.file_uploader("Загрузить изображение", type=["png", "jpg", "jpeg", "webp"])
     prompt_context = st.text_area(
         "Контекст промпта",
         placeholder="Опишите, что нейросеть должна проанализировать или создать...",
-        height=120
+        height=120,
     )
 
     if st.button("Сгенерировать промпт", type="primary", use_container_width=True):
         source = uploaded.name if uploaded else "загруженное изображение"
         context = prompt_context.strip() or "скриншот SEO-страницы"
         st.session_state.generated_prompt = (
-            f"Проанализируй {source} как {context}. Найди проблемы визуальной иерархии, конверсионных блоков, "
-            "SEO-контента, доверия, понятности CTA и мобильной верстки. Верни рекомендации по приоритету."
+            f"Проанализируй {source} как {context}. Найди проблемы визуальной иерархии, "
+            "конверсионных блоков, SEO-контента, доверия, понятности CTA и мобильной версии. "
+            "Верни рекомендации по приоритету."
         )
 
     prompt = st.session_state.get("generated_prompt", "")
 
     if prompt:
-        st.text_area("Generated prompt", value=prompt, height=150)
+        st.text_area("Готовый промпт", value=prompt, height=150)
 
-        if st.button("Copy prompt", use_container_width=True):
-            st.toast("Prompt is ready to copy from the text area.")
+        if st.button("Скопировать промпт", use_container_width=True):
+            st.toast("Промпт готов в поле выше.")
     else:
-        st.info("Upload placeholder is UI-only for now. Prompt generation uses mock output.")
-
-
-def mock_correct_text(text):
-    if not text.strip():
-        return ""
-
-    corrected = text.strip()
-    corrected = corrected.replace("  ", " ")
-
-    if corrected and corrected[-1] not in ".!?":
-        corrected += "."
-
-    return corrected[0].upper() + corrected[1:] if corrected else corrected
+        st.info("Загрузка изображения пока работает как UI-заготовка. Генерация промпта остаётся локальной.")
 
 
 def show_grammar_checker():
     section_header(
         "Проверка текста",
-        "Демо-проверка орфографии и пунктуации для SEO-текстов и описаний страниц."
+        "YandexGPT исправляет орфографию, пунктуацию и явные опечатки в SEO-текстах.",
     )
 
     source_text = st.text_area(
         "Текст для проверки",
         placeholder="Введите текст для проверки орфографии и пунктуации...",
-        height=160
+        height=160,
     )
 
     if st.button("Проверить текст", type="primary", use_container_width=True):
-        st.session_state.corrected_text = mock_correct_text(source_text)
+        with st.spinner("Проверяем текст через YandexGPT..."):
+            st.session_state.corrected_text = correct_text_with_yandexgpt(source_text)
 
-    corrected = st.session_state.get("corrected_text", "")
+    result = st.session_state.get("corrected_text")
 
-    if corrected:
-        output_block("Исправленная версия", corrected)
-        st.caption("Демо-проверка убирает лишние пробелы, исправляет первую букву и добавляет знак в конце.")
+    if result and result.get("corrected"):
+        if result.get("ok"):
+            st.success(result.get("message", "Текст проверен через YandexGPT."))
+        else:
+            st.warning(result.get("message", "YandexGPT недоступен, применена простая fallback-правка."))
+
+        output_block("Исправленная версия", result["corrected"])
     else:
-        st.info("Вставьте текст и запустите проверку. Полная языковая модель будет подключена позже.")
+        st.info("Вставьте текст и запустите проверку. Если API недоступен, интерфейс не упадёт и покажет fallback.")
 
 
 def show_ai_helper():
     section_header(
-        "Архитектура SEO-помощника",
-        "Будущий слой подсказок, объяснений аудита и автоматизации рабочих задач."
+        "SEO-помощник",
+        "Monthly Audit использует YandexGPT для кратких рекомендаций по результатам аудита, а при ошибке API возвращает локальные подсказки.",
     )
 
     cols = st.columns(3)
 
     helpers = [
-        ("SEO-помощник", "Объяснит результаты аудита и подскажет следующий шаг."),
-        ("Умные рекомендации", "Поможет расставить приоритеты по ошибкам и задачам."),
-        ("Помощник по контенту", "Свяжет генерацию meta, проверку текста и брифы страниц."),
+        ("AI", "Краткие выводы", "Понятные рекомендации по аудиту без технического шума."),
+        ("SEO", "Приоритеты", "Помогает понять, какие ошибки исправлять первыми."),
+        ("TXT", "Контент", "Связывает meta generation и проверку текста в один рабочий процесс."),
     ]
 
-    for column, (title, text) in zip(cols, helpers):
+    for column, (icon, title, text) in zip(cols, helpers):
         with column:
-            ai_feature_card("AI", title, text)
+            ai_feature_card(icon, title, text)
 
 
 def show_meta_generator_page():
+    status_text = "YandexGPT подключен" if yandex_gpt_available() else "Нужны ключи в .env"
+
     st.markdown(
-        """
+        f"""
         <div class="ts-ai-hero">
             <div>
                 <div class="ts-saas-hero-title">Нейросети</div>
                 <div class="ts-saas-hero-subtitle">
-                    Генерация meta-тегов, подготовка промптов, проверка текста и будущий SEO-помощник в одном разделе.
+                    Генерация meta-тегов, проверка текста и SEO-помощник на базе YandexGPT.
                 </div>
             </div>
-            <div class="ts-saas-pill">Демо-ответы</div>
+            <div class="ts-saas-pill">{escape(status_text)}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
     feature_cols = st.columns(4)
     features = [
         ("✎", "Генератор meta", "Title, description и варианты сниппетов."),
         ("▣", "Генератор промптов", "Промпты для визуальных и SEO-задач."),
-        ("✓", "Проверка текста", "Уборка лишних пробелов и пунктуация."),
-        ("AI", "SEO-помощник", "Архитектура будущих рекомендаций."),
+        ("✓", "Проверка текста", "Орфография, пунктуация и аккуратная редактура."),
+        ("AI", "SEO-помощник", "Краткие рекомендации по аудиту."),
     ]
 
     for column, feature in zip(feature_cols, features):

@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 
 from services.auth_service import (
     authenticate_user,
@@ -10,9 +11,55 @@ from services.auth_service import (
 )
 
 
+REMEMBER_STORAGE_KEY = "techseo_monitor_session"
+
+
+def sync_remember_device(clear=False):
+    clear_flag = "true" if clear else "false"
+
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const targetWindow = window.parent || window;
+            const storageKey = "{REMEMBER_STORAGE_KEY}";
+            const url = new URL(targetWindow.location.href);
+            const params = url.searchParams;
+            const token = params.get("session");
+            const logoutRequested = params.get("logout") === "1";
+
+            if ({clear_flag} || logoutRequested) {{
+                targetWindow.localStorage.removeItem(storageKey);
+                params.delete("logout");
+                params.delete("session");
+                const nextUrl = url.pathname + (params.toString() ? "?" + params.toString() : "");
+                targetWindow.history.replaceState(null, "", nextUrl);
+                return;
+            }}
+
+            if (token) {{
+                targetWindow.localStorage.setItem(storageKey, token);
+                return;
+            }}
+
+            const savedToken = targetWindow.localStorage.getItem(storageKey);
+            if (savedToken) {{
+                params.set("session", savedToken);
+                targetWindow.location.search = params.toString();
+            }}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
 def init_auth_state():
     if "auth_user" not in st.session_state:
         st.session_state.auth_user = None
+
+    invalid_session = False
+    logout_requested = st.query_params.get("logout") == "1"
 
     if not st.session_state.auth_user:
         token = st.query_params.get("session")
@@ -20,10 +67,17 @@ def init_auth_state():
 
         if remembered_user:
             st.session_state.auth_user = remembered_user
+        elif token:
+            invalid_session = True
 
     if st.session_state.auth_user:
         user = get_public_user(st.session_state.auth_user["id"])
         st.session_state.auth_user = user
+
+    sync_remember_device(clear=logout_requested or invalid_session)
+
+    if logout_requested or invalid_session:
+        st.query_params.clear()
 
 
 def get_current_user():
@@ -38,8 +92,9 @@ def require_user_id():
 def logout():
     token = st.query_params.get("session")
     revoke_remember_session(token)
-    st.query_params.clear()
     st.session_state.auth_user = None
+    st.query_params.clear()
+    st.query_params["logout"] = "1"
     st.rerun()
 
 

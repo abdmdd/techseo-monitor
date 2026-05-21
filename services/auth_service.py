@@ -1,9 +1,7 @@
-import base64
-import hashlib
-import hmac
-import os
 import re
 import secrets
+
+from passlib.context import CryptContext
 
 from database.db import (
     create_auth_session,
@@ -11,12 +9,13 @@ from database.db import (
     delete_auth_session,
     get_user_by_email,
     get_user_by_id,
-    get_user_by_session_token
+    get_user_by_session_token,
+    update_user_password_hash
 )
 
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-HASH_ITERATIONS = 260_000
+PASSWORD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def normalize_email(email):
@@ -28,22 +27,24 @@ def is_valid_email(email):
 
 
 def hash_password(password):
-    salt = os.urandom(16)
-    digest = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        salt,
-        HASH_ITERATIONS
-    )
-
-    return "pbkdf2_sha256${}${}${}".format(
-        HASH_ITERATIONS,
-        base64.b64encode(salt).decode("ascii"),
-        base64.b64encode(digest).decode("ascii")
-    )
+    return PASSWORD_CONTEXT.hash(password)
 
 
 def verify_password(password, password_hash):
+    if not password_hash:
+        return False
+
+    try:
+        return PASSWORD_CONTEXT.verify(password, password_hash)
+    except (ValueError, TypeError):
+        return verify_legacy_pbkdf2_password(password, password_hash)
+
+
+def verify_legacy_pbkdf2_password(password, password_hash):
+    import base64
+    import hashlib
+    import hmac
+
     try:
         algorithm, iterations, salt, stored_digest = password_hash.split("$", 3)
     except ValueError:
@@ -63,6 +64,10 @@ def verify_password(password, password_hash):
         base64.b64encode(digest).decode("ascii"),
         stored_digest
     )
+
+
+def is_bcrypt_hash(password_hash):
+    return str(password_hash or "").startswith(("$2a$", "$2b$", "$2y$"))
 
 
 def register_user(email, password, name=""):
@@ -92,6 +97,9 @@ def authenticate_user(email, password):
 
     if not verify_password(password or "", password_hash):
         return None
+
+    if not is_bcrypt_hash(password_hash):
+        update_user_password_hash(user_id, hash_password(password))
 
     return {
         "id": user_id,
