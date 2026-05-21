@@ -20,7 +20,7 @@ def get_host_id_from_url(url):
 
 
 def show_yandex_webmaster_block(url):
-    st.subheader("1. Яндекс Вебмастер и Google Search Console")
+    st.subheader("Яндекс Вебмастер")
 
     host_id = get_host_id_from_url(url)
 
@@ -90,6 +90,4 @@ def show_yandex_webmaster_block(url):
             st.code(yandex_data.get("error"))
 
     st.divider()
-    st.subheader("Google Search Console")
-    st.info("Google Search Console пока не подключен.")
     st.divider()

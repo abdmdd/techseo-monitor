@@ -103,9 +103,21 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
             email TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     """)
 
@@ -181,6 +193,9 @@ def init_db():
     if not column_exists(cursor, "audit_history", "user_id"):
         cursor.execute("ALTER TABLE audit_history ADD COLUMN user_id INTEGER")
 
+    if not column_exists(cursor, "users", "name"):
+        cursor.execute("ALTER TABLE users ADD COLUMN name TEXT")
+
     columns_to_add = [
         ("yandex_reviews_url", "TEXT"),
         ("google_reviews_url", "TEXT"),
@@ -208,6 +223,7 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_jobs_user_status ON audit_jobs(user_id, status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_jobs_site ON audit_jobs(site_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_jobs_task_id ON audit_jobs(task_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token)")
 
     conn.commit()
     conn.close()
@@ -452,15 +468,15 @@ def get_active_audit_job(user_id, site_url=None, audit_type="monthly"):
     return _audit_job_row_to_dict(row)
 
 
-def create_user(email, password_hash):
+def create_user(email, password_hash, name=""):
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
         cursor.execute("""
-            INSERT INTO users (email, password_hash)
-            VALUES (?, ?)
-        """, (email.strip().lower(), password_hash))
+            INSERT INTO users (name, email, password_hash)
+            VALUES (?, ?, ?)
+        """, (name.strip(), email.strip().lower(), password_hash))
         conn.commit()
         user_id = cursor.lastrowid
     except sqlite3.IntegrityError:
@@ -475,7 +491,7 @@ def get_user_by_email(email):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, email, password_hash, created_at
+        SELECT id, name, email, password_hash, created_at
         FROM users
         WHERE email = ?
     """, (email.strip().lower(),))
@@ -490,7 +506,7 @@ def get_user_by_id(user_id):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, email, created_at
+        SELECT id, name, email, created_at
         FROM users
         WHERE id = ?
     """, (user_id,))
@@ -498,6 +514,48 @@ def get_user_by_id(user_id):
     row = cursor.fetchone()
     conn.close()
     return row
+
+
+def create_auth_session(user_id, token):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO auth_sessions (user_id, token)
+        VALUES (?, ?)
+    """, (user_id, token))
+    conn.commit()
+    conn.close()
+
+
+def get_user_by_session_token(token):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT users.id, users.name, users.email, users.created_at
+        FROM auth_sessions
+        JOIN users ON users.id = auth_sessions.user_id
+        WHERE auth_sessions.token = ?
+    """, (token,))
+    row = cursor.fetchone()
+
+    if row:
+        cursor.execute("""
+            UPDATE auth_sessions
+            SET last_used_at = CURRENT_TIMESTAMP
+            WHERE token = ?
+        """, (token,))
+        conn.commit()
+
+    conn.close()
+    return row
+
+
+def delete_auth_session(token):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+    conn.commit()
+    conn.close()
 
 
 def add_site(

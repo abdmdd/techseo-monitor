@@ -1,11 +1,25 @@
 import streamlit as st
 
-from services.auth_service import authenticate_user, get_public_user, register_user
+from services.auth_service import (
+    authenticate_user,
+    create_remember_session,
+    get_public_user,
+    get_user_by_remember_token,
+    register_user,
+    revoke_remember_session
+)
 
 
 def init_auth_state():
     if "auth_user" not in st.session_state:
         st.session_state.auth_user = None
+
+    if not st.session_state.auth_user:
+        token = st.query_params.get("session")
+        remembered_user = get_user_by_remember_token(token)
+
+        if remembered_user:
+            st.session_state.auth_user = remembered_user
 
     if st.session_state.auth_user:
         user = get_public_user(st.session_state.auth_user["id"])
@@ -22,6 +36,9 @@ def require_user_id():
 
 
 def logout():
+    token = st.query_params.get("session")
+    revoke_remember_session(token)
+    st.query_params.clear()
     st.session_state.auth_user = None
     st.rerun()
 
@@ -29,7 +46,7 @@ def logout():
 def show_auth_page():
     st.markdown('<div class="ts-page-title">TechSEO Monitor</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="ts-page-subtitle">Войдите в аккаунт, чтобы управлять своими сайтами, аудитами и PDF-отчетами.</div>',
+        '<div class="ts-page-subtitle">Войдите в аккаунт, чтобы управлять своими сайтами и SEO-аудитами.</div>',
         unsafe_allow_html=True
     )
 
@@ -55,6 +72,7 @@ def show_auth_page():
             with st.form("login_form"):
                 email = st.text_input("Email", placeholder="you@example.com")
                 password = st.text_input("Пароль", type="password")
+                remember = st.checkbox("Запомнить это устройство", value=True)
                 submitted = st.form_submit_button("Войти", type="primary", use_container_width=True)
 
                 if submitted:
@@ -62,6 +80,8 @@ def show_auth_page():
 
                     if user:
                         st.session_state.auth_user = user
+                        if remember:
+                            st.query_params["session"] = create_remember_session(user["id"])
                         st.success("Вход выполнен.")
                         st.rerun()
                     else:
@@ -69,21 +89,25 @@ def show_auth_page():
 
         with tab_register:
             with st.form("register_form"):
+                name = st.text_input("Имя", placeholder="Как к вам обращаться")
                 email = st.text_input("Email", placeholder="you@example.com", key="register_email")
                 password = st.text_input("Пароль", type="password", key="register_password")
                 password_confirm = st.text_input("Повторите пароль", type="password")
+                remember = st.checkbox("Запомнить это устройство", value=True, key="register_remember")
                 submitted = st.form_submit_button("Создать аккаунт", type="primary", use_container_width=True)
 
                 if submitted:
                     if password != password_confirm:
                         st.error("Пароли не совпадают.")
                     else:
-                        user, error = register_user(email, password)
+                        user, error = register_user(email, password, name=name)
 
                         if error:
                             st.error(error)
                         else:
                             st.session_state.auth_user = user
+                            if remember:
+                                st.query_params["session"] = create_remember_session(user["id"])
                             st.success("Аккаунт создан.")
                             st.rerun()
 

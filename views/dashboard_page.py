@@ -121,85 +121,27 @@ def get_user_name():
 
 
 def show_dashboard():
-    user_id = require_user_id()
-    user_name = get_user_name()
-    sites = get_sites(user_id=user_id)
-    history = get_audit_history(user_id=user_id)
-
-    sites_count = len(sites)
-    audits_count = len(history)
-    latest_audit = history[0] if history else None
-    latest_score = latest_audit[3] if latest_audit else 0
-    latest_errors = latest_audit[4] if latest_audit else 0
-    latest_audit_label = latest_audit[11] if latest_audit else "пока нет аудитов"
-    score_risk = get_score_risk(latest_score)
+    user = get_current_user() or {}
+    user_name = user.get("name") or get_user_name()
 
     st.markdown(
         f"""
         <div class="ts-saas-hero">
             <div>
-                <div class="ts-saas-hero-title">Привет, {escape(user_name)}. Это ваша главная SEO-панель.</div>
+                <div class="ts-saas-hero-title">Привет, {escape(user_name)} 🌸</div>
                 <div class="ts-saas-hero-subtitle">
-                    Здесь видно, что происходит с сайтами: последняя SEO-оценка, количество проверок,
-                    найденные ошибки и быстрые действия для следующего шага.
+                    Это спокойная главная страница TechSEO Monitor: возможности платформы, быстрый старт и маленькое SEO-напутствие.
                 </div>
             </div>
-            <div class="ts-saas-pill">Рабочее пространство MVP</div>
+            <div class="ts-saas-pill">SEO-блокнот MVP</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    col1, col2, col3, col4, col5 = st.columns([1.2, 1, 1, 1, 1.2])
-    with col1:
-        metric_card("SEO-оценка", f"{latest_score}/100", "По последнему аудиту", "#2563eb")
-    with col2:
-        metric_card("Сайтов", sites_count, "Добавлено в мониторинг", "#0f766e")
-    with col3:
-        metric_card("Аудитов", audits_count, "Всего проверок", "#7c3aed")
-    with col4:
-        metric_card("Ошибок", latest_errors, "В последней проверке", "#dc2626")
-    with col5:
-        risk_card(latest_score, score_risk["risk"], score_risk["color"])
-
-    st.caption(f"Последний аудит: {latest_audit_label}")
-
-    section_header(
-        "Быстрые действия",
-        "Самые частые действия для спокойной ежедневной работы с SEO-мониторингом.",
-    )
-
-    action_cols = st.columns(4)
-    actions = [
-        ("▶", "Запустить аудит", "Проверьте сайт и получите понятный список ошибок."),
-        ("+", "Добавить сайт", "Добавьте новый сайт, чтобы следить за его состоянием."),
-        ("✎", "Генерация meta", "Подготовьте title и description для страницы."),
-        ("✨", "Получить напутствие", "Короткая дружелюбная подсказка для следующего SEO-шага."),
-    ]
-    for column, action in zip(action_cols, actions):
-        with column:
-            action_card(*action)
-
-    button_cols = st.columns(4)
-    with button_cols[0]:
-        if st.button("Запустить аудит", use_container_width=True):
-            st.info("Откройте раздел «Ежемесячный аудит» и выберите сайт для проверки.")
-    with button_cols[1]:
-        if st.button("Добавить сайт", use_container_width=True):
-            st.info("Откройте раздел «Мои сайты» и добавьте адрес сайта.")
-    with button_cols[2]:
-        if st.button("Генерация meta", use_container_width=True):
-            st.info("Откройте раздел «Нейросети», чтобы подготовить заголовки и описания.")
-    with button_cols[3]:
-        if st.button("Получить напутствие 🌸", use_container_width=True):
-            st.session_state["motivation_item"] = get_random_motivation()
-
-    if st.session_state.get("motivation_item"):
-        motivation_card(st.session_state["motivation_item"])
-
     section_header(
         "Что умеет платформа",
-        "Ключевые возможности, которые помогают владельцу бизнеса видеть состояние сайта без лишней технической сложности.",
+        "Основные возможности, которые помогают владельцу бизнеса видеть состояние сайта без лишней технической сложности.",
     )
 
     features = [
@@ -207,14 +149,14 @@ def show_dashboard():
         ("🗺", "Проверка sitemap.xml", "Показывает, есть ли карта сайта и доступна ли она поисковикам."),
         ("🤖", "Проверка robots.txt", "Помогает не закрыть важные страницы от индексации случайно."),
         ("🔗", "Битые ссылки", "Находит ссылки, которые ведут на недоступные страницы."),
-        ("🎯", "Анализ конкурентов", "Готовит основу для сравнения сайта с конкурентами в поиске."),
+        ("🎯", "Анализ конкурентов", "Помогает увидеть близкие темы и будущие зоны роста в поиске."),
         ("✨", "AI для SEO", "Помогает быстрее готовить meta-теги, тексты и идеи для страниц."),
         ("📊", "Яндекс.Метрика", "Подготовленный блок для будущего подключения аналитики."),
         ("📈", "Яндекс.Вебмастер", "Подготовленный блок для будущей поисковой интеграции."),
     ]
     for row_start in range(0, len(features), 4):
         cols = st.columns(4)
-        for column, feature in zip(cols, features[row_start : row_start + 4]):
+        for column, feature in zip(cols, features[row_start:row_start + 4]):
             with column:
                 feature_card(*feature)
 
@@ -232,46 +174,9 @@ def show_dashboard():
         with column:
             step_card(*step)
 
-    section_header(
-        "Последние аудиты",
-        "Свежие проверки в виде карточек: оценка, ошибки и дата запуска.",
-    )
+    section_header("Напутствие", "Маленькая дружелюбная карточка для спокойной работы.")
+    if st.button("Получить напутствие 🌸", use_container_width=True):
+        st.session_state["motivation_item"] = get_random_motivation()
 
-    if history:
-        latest_cards = st.columns(3)
-        for index, audit in enumerate(history[:6]):
-            with latest_cards[index % 3]:
-                audit_card(audit)
-
-        df = pd.DataFrame(
-            history,
-            columns=[
-                "ID",
-                "URL",
-                "Тип аудита",
-                "SEO-оценка",
-                "Ошибки",
-                "Title",
-                "Description",
-                "Canonical",
-                "H1",
-                "Robots",
-                "Sitemap",
-                "Дата",
-            ],
-        )
-
-        st.divider()
-        section_header("Динамика SEO-оценки", "Как менялась оценка сайта по сохраненным аудитам.")
-        chart_df = df[["Дата", "SEO-оценка"]].copy().sort_values(by="Дата")
-        st.line_chart(chart_df.set_index("Дата"), height=250)
-    else:
-        st.markdown(
-            """
-            <div class="ts-empty-state">
-                🌸 Добавьте первый сайт для начала SEO-мониторинга. После первой проверки здесь появятся карточки аудитов,
-                ошибки и динамика SEO-оценки.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    if st.session_state.get("motivation_item"):
+        motivation_card(st.session_state["motivation_item"])

@@ -1,346 +1,333 @@
 from datetime import datetime
-from html import escape
 
 import streamlit as st
 
-from components.ui_helpers import metric_card
 from database.db import get_sites
 from views.auth_page import require_user_id
 
 
 CHECKLIST = {
-    "Technical SEO": [
+    "Техническое SEO": [
         {
-            "id": "technical_full_crawl",
-            "title": "Run full website crawl",
-            "description": "Review crawl depth, broken links, redirects, canonical and meta coverage.",
+            "id": "tech_crawl",
+            "title": "Проверить доступность важных страниц",
+            "description": "Убедитесь, что главная, категории, услуги и ключевые посадочные страницы открываются без ошибок.",
+            "tool": "Открыть сайт",
+            "url": "#",
+        },
+        {
+            "id": "tech_redirects",
+            "title": "Проверить редиректы",
+            "description": "Лишние цепочки редиректов замедляют сайт и могут мешать поисковым роботам.",
             "tool": "Ежемесячный аудит",
             "url": "#",
         },
         {
-            "id": "technical_performance",
-            "title": "Check page speed and Core Web Vitals",
-            "description": "Plan performance review for key landing pages and templates.",
-            "tool": "PageSpeed Insights",
-            "url": "https://pagespeed.web.dev/",
-        },
-        {
-            "id": "technical_schema",
-            "title": "Validate structured data",
-            "description": "Check important pages for valid schema.org markup and rich result eligibility.",
-            "tool": "Rich Results Test",
-            "url": "https://search.google.com/test/rich-results",
+            "id": "tech_canonical",
+            "title": "Проверить canonical",
+            "description": "Canonical помогает поиску понять, какая страница является основной.",
+            "tool": "Ежемесячный аудит",
+            "url": "#",
         },
     ],
-    "Indexing": [
+    "Индексация": [
         {
-            "id": "indexing_sitemap",
-            "title": "Review sitemap and robots directives",
-            "description": "Confirm sitemap freshness, robots availability and indexable URL coverage.",
-            "tool": "TechSEO Monitor",
+            "id": "index_sitemap",
+            "title": "Проверить sitemap.xml",
+            "description": "Sitemap должен содержать актуальные страницы, которые вы хотите видеть в поиске.",
+            "tool": "Sitemap.xml",
             "url": "#",
         },
         {
-            "id": "indexing_search_console",
-            "title": "Check indexed pages and exclusions",
-            "description": "Review indexed URLs, excluded URLs and important crawling warnings.",
-            "tool": "Google Search Console",
-            "url": "https://search.google.com/search-console",
+            "id": "index_robots",
+            "title": "Проверить robots.txt",
+            "description": "Robots.txt не должен случайно закрывать важные разделы от индексации.",
+            "tool": "Robots.txt",
+            "url": "#",
         },
         {
-            "id": "indexing_yandex",
-            "title": "Check Yandex Webmaster diagnostics",
-            "description": "Review host status, indexing signals and regional/search warnings.",
-            "tool": "Yandex Webmaster",
+            "id": "index_search",
+            "title": "Сверить страницы в поиске",
+            "description": "Посмотрите, какие страницы реально находятся в поиске, и нет ли там мусорных URL.",
+            "tool": "Яндекс Вебмастер",
             "url": "https://webmaster.yandex.ru/",
         },
     ],
-    "Commercial Factors": [
+    "Коммерческие факторы": [
         {
             "id": "commercial_contacts",
-            "title": "Verify contacts and trust signals",
-            "description": "Check phone, address, legal information, delivery, payment and guarantees.",
-            "tool": "Manual review",
+            "title": "Обновить контакты и реквизиты",
+            "description": "Поиску и клиентам важно видеть понятные способы связи с компанией.",
+            "tool": "Открыть сайт",
             "url": "#",
         },
         {
-            "id": "commercial_reviews",
-            "title": "Review reputation signals",
-            "description": "Check reviews widgets, rating snippets and external map cards.",
-            "tool": "Maps / Reviews",
+            "id": "commercial_trust",
+            "title": "Проверить доверие на страницах",
+            "description": "Отзывы, гарантии, кейсы и понятные условия помогают посетителю принять решение.",
+            "tool": "Открыть сайт",
             "url": "#",
         },
         {
-            "id": "commercial_conversion",
-            "title": "Review conversion paths",
-            "description": "Check forms, CTAs, lead buttons and product/service page clarity.",
-            "tool": "Analytics",
+            "id": "commercial_cta",
+            "title": "Проверить формы и кнопки заявки",
+            "description": "Заявка, звонок или покупка должны быть заметными и работать без лишних шагов.",
+            "tool": "Открыть сайт",
             "url": "#",
         },
     ],
-    "Links": [
+    "Ссылки": [
         {
             "id": "links_internal",
-            "title": "Improve internal linking",
-            "description": "Find orphan-like pages, weak clusters and opportunities for contextual links.",
-            "tool": "Crawler report",
+            "title": "Проверить внутренние ссылки",
+            "description": "Важные страницы должны получать ссылки из меню, блоков и связанных материалов.",
+            "tool": "Ежемесячный аудит",
             "url": "#",
         },
         {
             "id": "links_broken",
-            "title": "Fix broken internal links",
-            "description": "Prioritize 404/internal link issues found during the full crawl.",
+            "title": "Исправить битые ссылки",
+            "description": "Битые ссылки ухудшают опыт пользователя и мешают роботам обходить сайт.",
             "tool": "Ежемесячный аудит",
             "url": "#",
         },
         {
-            "id": "links_backlinks",
-            "title": "Review backlink quality",
-            "description": "Check toxic links, strong referring domains and competitor link gaps.",
-            "tool": "External SEO tool",
-            "url": "#",
+            "id": "links_partners",
+            "title": "Проверить внешние упоминания",
+            "description": "Полезные упоминания бренда помогают сайту выглядеть надежнее в своей нише.",
+            "tool": "Поиск",
+            "url": "https://yandex.ru/search/",
         },
     ],
-    "Content": [
+    "Контент": [
         {
             "id": "content_meta",
-            "title": "Refresh title and description templates",
-            "description": "Review duplicate, missing and weak meta tags across crawled pages.",
-            "tool": "Генератор meta",
+            "title": "Обновить Title и Description",
+            "description": "Сниппеты должны понятно объяснять, чем страница полезна клиенту.",
+            "tool": "Нейросети",
             "url": "#",
         },
         {
-            "id": "content_intent",
-            "title": "Check search intent alignment",
-            "description": "Сравните важные посадочные страницы с целевыми запросами и ожиданиями поисковой выдачи.",
-            "tool": "Обзор выдачи",
+            "id": "content_h1",
+            "title": "Проверить H1 и структуру текста",
+            "description": "Заголовок и структура страницы должны быстро отвечать на вопрос посетителя.",
+            "tool": "Ежемесячный аудит",
             "url": "#",
         },
         {
-            "id": "content_updates",
-            "title": "Plan content updates",
-            "description": "Create quarterly notes for outdated pages, new sections and missing FAQs.",
-            "tool": "SEO notebook",
+            "id": "content_freshness",
+            "title": "Обновить устаревшие материалы",
+            "description": "Свежие цены, сроки, примеры и условия помогают странице оставаться полезной.",
+            "tool": "Открыть сайт",
             "url": "#",
         },
     ],
 }
 
 
-def select_site_from_db(label):
-    sites = get_sites(user_id=require_user_id())
-
-    if sites:
-        site_options = {
-            f"{site[1]} - {site[2]}": site
-            for site in sites
-        }
-        selected_site_label = st.selectbox(label, list(site_options.keys()))
-        return site_options[selected_site_label]
-
-    st.warning("Сначала добавьте сайт во вкладке «Мои сайты».")
-    manual_url = st.text_input("Введите URL сайта вручную", "https://example.ru")
-
-    return (
-        None,
-        "Ручной сайт",
-        manual_url,
-        "",
-        "",
-        "",
-        "",
-        "",
-        ""
-    )
+def _site_label(site):
+    return f"{site[1]} · {site[2]}"
 
 
-def checklist_state_key(site_id, item_id, field):
-    stable_site_id = site_id or "manual"
-    return f"quarterly_checklist_{stable_site_id}_{item_id}_{field}"
+def _state_key(site_id, item_id, suffix):
+    return f"quarterly_notebook_{site_id}_{item_id}_{suffix}"
 
 
-def section_header(title, subtitle):
-    st.markdown(
-        f"""
-        <div class="ts-dashboard-section">
-            <div class="ts-section-title">{escape(title)}</div>
-            <div class="ts-section-subtitle">{escape(subtitle)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-def progress_bar(percent):
-    st.markdown(
-        f"""
-        <div class="ts-progress-track">
-            <div class="ts-progress-fill" style="width: {max(0, min(100, percent))}%;"></div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-def get_checklist_stats(site_id):
+def _checked_count(site_id):
     total = 0
-    completed = 0
+    done = 0
+    with_notes = 0
     category_stats = {}
 
     for category, items in CHECKLIST.items():
         category_total = len(items)
-        category_completed = 0
-
+        category_done = 0
         for item in items:
             total += 1
-            checked = st.session_state.get(checklist_state_key(site_id, item["id"], "checked"), False)
-
+            checked = bool(st.session_state.get(_state_key(site_id, item["id"], "checked"), False))
+            notes = str(st.session_state.get(_state_key(site_id, item["id"], "notes"), "")).strip()
             if checked:
-                completed += 1
-                category_completed += 1
+                done += 1
+                category_done += 1
+            if notes:
+                with_notes += 1
+        category_stats[category] = (category_done, category_total)
 
-        category_stats[category] = {
-            "completed": category_completed,
-            "total": category_total,
-            "percent": round((category_completed / category_total) * 100) if category_total else 0,
-        }
-
-    percent = round((completed / total) * 100) if total else 0
-
-    return completed, total, percent, category_stats
+    return done, total, with_notes, category_stats
 
 
-def checklist_card(site_id, category, item):
-    checked_key = checklist_state_key(site_id, item["id"], "checked")
-    date_key = checklist_state_key(site_id, item["id"], "checked_date")
-    notes_key = checklist_state_key(site_id, item["id"], "notes")
+def _progress_line(done, total):
+    percent = int(round((done / total) * 100)) if total else 0
+    st.progress(percent / 100 if total else 0, text=f"Готово {done} из {total} проверок")
+    return percent
 
-    previous_checked = st.session_state.get(checked_key, False)
-    checked = st.checkbox(item["title"], value=previous_checked, key=checked_key)
 
-    if checked and not previous_checked:
-        st.session_state[date_key] = datetime.now().strftime("%Y-%m-%d")
-    elif not checked:
-        st.session_state[date_key] = "—"
+def _notebook_card(site_id, category, item):
+    checked_key = _state_key(site_id, item["id"], "checked")
+    notes_key = _state_key(site_id, item["id"], "notes")
+    date_key = _state_key(site_id, item["id"], "date")
 
-    checked_date = st.session_state.get(date_key, "—")
+    checked_before = bool(st.session_state.get(checked_key, False))
+    checked = st.checkbox(item["title"], key=checked_key)
+
+    if checked and not checked_before:
+        st.session_state[date_key] = datetime.now().strftime("%d.%m.%Y")
+    if not checked:
+        st.session_state[date_key] = ""
+
+    checked_date = st.session_state.get(date_key, "")
+    status = "Готово" if checked else "В работе"
+    badge_class = "ok" if checked else "neutral"
 
     st.markdown(
         f"""
-        <div class="ts-checklist-card">
-            <div class="ts-checklist-title">{escape(item["title"])}</div>
-            <div class="ts-card-text">{escape(item["description"])}</div>
-            <div class="ts-checklist-meta-grid">
-                <div class="ts-checklist-meta">
-                    <div class="ts-integration-label">Category</div>
-                    <div class="ts-integration-value">{escape(category)}</div>
-                </div>
-                <div class="ts-checklist-meta">
-                    <div class="ts-integration-label">Checked date</div>
-                    <div class="ts-integration-value">{escape(checked_date)}</div>
-                </div>
+        <div class="ts-check-card">
+            <div class="ts-check-card__top">
+                <span class="ts-badge {badge_class}">{status}</span>
+                <span class="ts-check-category">{category}</span>
             </div>
+            <p>{item["description"]}</p>
+            <div class="ts-check-date">Дата проверки: {checked_date or "пока не отмечено"}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
     st.text_area(
-        "Notes",
+        "Заметки",
         key=notes_key,
-        placeholder="Add quarterly SEO notes, decisions or follow-up tasks...",
-        height=86,
-        label_visibility="collapsed"
+        height=88,
+        placeholder="Что проверили, что решили исправить, к чему вернуться позже...",
     )
 
-    if item["url"] == "#":
-        st.caption(f"External tool: {item['tool']} · placeholder")
-    else:
+    if item["url"] != "#":
         st.link_button(item["tool"], item["url"], use_container_width=True)
-
-
-def show_empty_state():
-    st.markdown(
-        """
-        <div class="ts-empty-state">
-            <div class="ts-card-title">SEO notebook is ready</div>
-            <div class="ts-card-text">
-                Select a site, mark checklist items as completed, add notes and use external tool links.
-                Current state is temporary and prepared for future sqlite persistence.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    else:
+        st.caption(f"Инструмент: {item['tool']}")
 
 
 def show_quarterly_audit_page():
-    selected_site = select_site_from_db("Выберите сайт для quarterly checklist")
-    site_id = selected_site[0]
-    site_name = selected_site[1]
-    url = selected_site[2]
-
-    completed, total, percent, category_stats = get_checklist_stats(site_id)
+    user_id = require_user_id()
+    sites = get_sites(user_id=user_id)
 
     st.markdown(
-        f"""
-        <div class="ts-audit-header">
-            <div>
-                <div class="ts-saas-hero-title">SEO Checklist Center</div>
-                <div class="ts-saas-hero-subtitle">
-                    Planning center and SEO notebook for <strong>{escape(site_name)}</strong><br>
-                    {escape(url)}
-                </div>
-            </div>
-            <div class="ts-saas-pill">Temporary in-memory state</div>
+        """
+        <style>
+            .ts-notebook-hero {
+                padding: 26px;
+                border: 1px solid #e5e7eb;
+                border-radius: 18px;
+                background: linear-gradient(135deg, #f8fafc 0%, #eef7ff 100%);
+                margin-bottom: 18px;
+            }
+            .ts-notebook-hero h1 {
+                margin: 0 0 8px 0;
+                font-size: 30px;
+                color: #0f172a;
+            }
+            .ts-notebook-hero p {
+                margin: 0;
+                color: #64748b;
+                font-size: 15px;
+                line-height: 1.6;
+            }
+            .ts-check-card {
+                padding: 16px;
+                border: 1px solid #e5e7eb;
+                border-radius: 16px;
+                background: #ffffff;
+                box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+                margin: 8px 0 10px;
+            }
+            .ts-check-card__top {
+                display: flex;
+                justify-content: space-between;
+                gap: 12px;
+                align-items: center;
+                margin-bottom: 10px;
+            }
+            .ts-check-card p {
+                margin: 0 0 12px;
+                color: #475569;
+                line-height: 1.55;
+            }
+            .ts-check-date,
+            .ts-check-category {
+                color: #64748b;
+                font-size: 13px;
+            }
+            .ts-badge {
+                display: inline-flex;
+                align-items: center;
+                border-radius: 999px;
+                padding: 5px 10px;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            .ts-badge.ok {
+                color: #047857;
+                background: #d1fae5;
+            }
+            .ts-badge.neutral {
+                color: #475569;
+                background: #f1f5f9;
+            }
+            .ts-small-note {
+                padding: 14px 16px;
+                border-radius: 14px;
+                background: #fff7ed;
+                color: #9a3412;
+                border: 1px solid #fed7aa;
+                margin: 14px 0 18px;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="ts-notebook-hero">
+            <h1>Ежеквартальный SEO-блокнот</h1>
+            <p>Спокойный чеклист для плановой работы: отмечайте проверки, оставляйте заметки и возвращайтесь к ним перед следующим кварталом.</p>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-    col1, col2, col3, col4 = st.columns(4)
+    if not sites:
+        st.info("Добавьте первый сайт, чтобы начать вести SEO-блокнот.")
+        return
 
-    with col1:
-        metric_card("Completed", f"{completed}/{total}", "Checklist items", "#2563eb")
-    with col2:
-        metric_card("Progress", f"{percent}%", "Overall completion", "#0f766e")
-    with col3:
-        metric_card("Categories", len(CHECKLIST), "SEO planning groups", "#7c3aed")
-    with col4:
-        metric_card("Notebook", "Active", "Session state", "#f59e0b")
+    selected_label = st.selectbox("Сайт для проверки", [_site_label(site) for site in sites])
+    selected_site = sites[[_site_label(site) for site in sites].index(selected_label)]
+    site_id = selected_site[0]
 
-    progress_bar(percent)
+    done, total, with_notes, category_stats = _checked_count(site_id)
+    percent = _progress_line(done, total)
 
-    section_header(
-        "Category progress",
-        "Track quarterly progress across technical, indexing, commercial, links and content work."
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Выполнено", f"{done}/{total}")
+    c2.metric("Прогресс", f"{percent}%")
+    c3.metric("Разделов", len(CHECKLIST))
+    c4.metric("С заметками", with_notes)
+
+    st.markdown(
+        '<div class="ts-small-note">Пока блокнот хранится в сессии браузера. Архитектура подготовлена так, чтобы позже сохранить состояние чеклиста в SQLite.</div>',
+        unsafe_allow_html=True,
     )
 
-    category_cols = st.columns(len(CHECKLIST))
-
-    for column, (category, stats) in zip(category_cols, category_stats.items()):
-        with column:
-            metric_card(
-                category,
-                f"{stats['percent']}%",
-                f"{stats['completed']}/{stats['total']} completed",
-                "#2563eb"
-            )
-
-    show_empty_state()
-
-    section_header(
-        "Quarterly SEO checklist",
-        "Use checkboxes, checked dates, notes and external tools to plan quarterly SEO work."
-    )
+    st.subheader("Прогресс по разделам")
+    progress_cols = st.columns(len(CHECKLIST))
+    for col, (category, (cat_done, cat_total)) in zip(progress_cols, category_stats.items()):
+        cat_percent = int(round((cat_done / cat_total) * 100)) if cat_total else 0
+        with col:
+            st.metric(category, f"{cat_percent}%")
 
     tabs = st.tabs(list(CHECKLIST.keys()))
-
     for tab, (category, items) in zip(tabs, CHECKLIST.items()):
         with tab:
-            for row_start in range(0, len(items), 2):
-                cols = st.columns(2)
-
-                for column, item in zip(cols, items[row_start:row_start + 2]):
-                    with column:
-                        checklist_card(site_id, category, item)
+            cols = st.columns(2)
+            for index, item in enumerate(items):
+                with cols[index % 2]:
+                    _notebook_card(site_id, category, item)

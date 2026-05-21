@@ -20,7 +20,7 @@ PLAYWRIGHT_TIMEOUT = int(os.getenv("PLAYWRIGHT_TIMEOUT", "45000"))
 MAX_SITEMAP_URLS = 200
 MAX_SITEMAP_BYTES = 5 * 1024 * 1024
 MAX_REDIRECT_HOPS = 10
-FULL_CRAWL_MAX_PAGES = int(os.getenv("FULL_CRAWL_MAX_PAGES", "30"))
+FULL_CRAWL_MAX_PAGES = int(os.getenv("FULL_CRAWL_MAX_PAGES", "50"))
 FULL_CRAWL_MAX_LINKS_PER_PAGE = int(os.getenv("FULL_CRAWL_MAX_LINKS_PER_PAGE", "250"))
 
 
@@ -545,10 +545,6 @@ def analyze_main_page(url, headers, results):
     results["images_without_alt_list"] = meta["images_without_alt_list"]
     results["images_without_alt"] = len(meta["images_without_alt_list"])
 
-    if results["images_without_alt"] > 0:
-        results["errors"].append(f"Изображений без alt: {results['images_without_alt']}")
-        results["recommendations"].append("Добавить alt-тексты для всех важных изображений.")
-
     results["links_total"] = len(meta["links"])
 
     return meta
@@ -627,9 +623,6 @@ def collect_page_issues(page, results):
 
     if not page["canonical"]:
         results["errors"].append(f"Missing canonical: {url}")
-
-    if page["images_total"] and page["image_alt_coverage"] < 100:
-        results["errors"].append(f"Images without alt on {url}: {page['images_without_alt']}")
 
 
 def update_full_crawl_reports(results, crawled_pages, redirect_chains):
@@ -1297,14 +1290,6 @@ def build_robots_analysis(results):
             "helper": "Добавьте строку Sitemap: https://ваш-сайт.ru/sitemap.xml.",
         },
         {
-            "title": "Нет полной блокировки сайта",
-            "status": technical_status_label(not full_block),
-            "severity_label": "Рекомендация" if not full_block else "Критично",
-            "severity_class": severity_class("recommendation" if not full_block else "critical"),
-            "explanation": "Disallow: / может закрыть весь сайт от обхода поисковыми роботами.",
-            "helper": "Оставьте полную блокировку только для тестовых или закрытых сайтов.",
-        },
-        {
             "title": "Важные разделы не закрыты",
             "status": technical_status_label(not blocked_sections, warning=True),
             "severity_label": "Рекомендация" if not blocked_sections else "Важно",
@@ -1313,6 +1298,16 @@ def build_robots_analysis(results):
             "helper": "Проверьте Disallow-правила для коммерческих и контентных разделов.",
         },
     ]
+
+    if full_block:
+        checks.insert(3, {
+            "title": "Обнаружена полная блокировка сайта",
+            "status": "Есть проблема",
+            "severity_label": "Критично",
+            "severity_class": severity_class("critical"),
+            "explanation": "Disallow: / может закрыть весь сайт от обхода поисковыми роботами.",
+            "helper": "Оставьте полную блокировку только для тестовых или закрытых сайтов.",
+        })
 
     return {
         "url": robots_url,

@@ -28,7 +28,6 @@ from views.history_page import show_history_page
 from views.meta_generator_page import show_meta_generator_page
 from views.monthly_audit_page import show_monthly_audit_page
 from views.quarterly_audit_page import show_quarterly_audit_page
-from views.reports_page import show_reports_page
 from views.sites_page import show_sites_page
 
 # ==================================================
@@ -76,7 +75,7 @@ st.markdown(
 # ==================================================
 
 st.sidebar.markdown("## Навигация")
-st.sidebar.caption(f"Вы вошли как {current_user['email']}")
+st.sidebar.caption(f"Вы вошли как {current_user.get('name') or current_user['email']}")
 
 if st.sidebar.button("Выйти", use_container_width=True):
     logout()
@@ -94,7 +93,6 @@ menu = st.sidebar.radio(
         "Нейросети",
         "Конкуренты",
         "История проверок",
-        "PDF-отчеты",
         "Настройки"
     ],
     label_visibility="collapsed"
@@ -121,8 +119,6 @@ elif menu == "Конкуренты":
     show_competitors_page()
 elif menu == "История проверок":
     show_history_page()
-elif menu == "PDF-отчеты":
-    show_reports_page()
 elif menu == "Настройки":
     st.header("Настройки")
     st.info("Раздел настроек будет стабилизирован на отдельном этапе.")

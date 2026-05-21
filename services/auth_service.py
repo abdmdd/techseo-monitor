@@ -3,8 +3,16 @@ import hashlib
 import hmac
 import os
 import re
+import secrets
 
-from database.db import create_user, get_user_by_email, get_user_by_id
+from database.db import (
+    create_auth_session,
+    create_user,
+    delete_auth_session,
+    get_user_by_email,
+    get_user_by_id,
+    get_user_by_session_token
+)
 
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -57,7 +65,7 @@ def verify_password(password, password_hash):
     )
 
 
-def register_user(email, password):
+def register_user(email, password, name=""):
     normalized_email = normalize_email(email)
 
     if not is_valid_email(normalized_email):
@@ -66,7 +74,7 @@ def register_user(email, password):
     if len(password or "") < 8:
         return None, "Пароль должен быть не короче 8 символов."
 
-    user_id = create_user(normalized_email, hash_password(password))
+    user_id = create_user(normalized_email, hash_password(password), name=name)
 
     if not user_id:
         return None, "Пользователь с таким email уже существует."
@@ -80,13 +88,14 @@ def authenticate_user(email, password):
     if not user:
         return None
 
-    user_id, user_email, password_hash, created_at = user
+    user_id, user_name, user_email, password_hash, created_at = user
 
     if not verify_password(password or "", password_hash):
         return None
 
     return {
         "id": user_id,
+        "name": user_name or user_email.split("@")[0],
         "email": user_email,
         "created_at": created_at
     }
@@ -100,6 +109,35 @@ def get_public_user(user_id):
 
     return {
         "id": user[0],
-        "email": user[1],
-        "created_at": user[2]
+        "name": user[1] or user[2].split("@")[0],
+        "email": user[2],
+        "created_at": user[3]
     }
+
+
+def create_remember_session(user_id):
+    token = secrets.token_urlsafe(32)
+    create_auth_session(user_id, token)
+    return token
+
+
+def get_user_by_remember_token(token):
+    if not token:
+        return None
+
+    user = get_user_by_session_token(token)
+
+    if not user:
+        return None
+
+    return {
+        "id": user[0],
+        "name": user[1] or user[2].split("@")[0],
+        "email": user[2],
+        "created_at": user[3]
+    }
+
+
+def revoke_remember_session(token):
+    if token:
+        delete_auth_session(token)

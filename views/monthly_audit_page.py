@@ -1,13 +1,13 @@
+import time
 from html import escape
 
 import pandas as pd
 import streamlit as st
 
-from components.ui_helpers import metric_card, recommendation_card, risk_card, warnings_block
+from components.ui_helpers import metric_card, recommendation_card, warnings_block
 from database.db import get_sites
 from services.ai_service import generate_ai_recommendations, generate_ai_summary
 from services.audit_service import enqueue_monthly_audit, get_latest_monthly_audit_job
-from services.score_service import get_score_risk
 from views.auth_page import require_user_id
 
 
@@ -89,22 +89,6 @@ def empty_state(title, text):
     )
 
 
-def average_image_alt_coverage(crawled_pages):
-    if not crawled_pages:
-        return "—"
-
-    values = [
-        float(page.get("image_alt_coverage", 100))
-        for page in crawled_pages
-        if page.get("image_alt_coverage") is not None
-    ]
-
-    if not values:
-        return "—"
-
-    return f"{round(sum(values) / len(values), 1)}%"
-
-
 def render_full_crawl_summary(result):
     full_crawl = result.get("full_crawl", {})
     crawled_pages = result.get("crawled_pages", [])
@@ -117,7 +101,7 @@ def render_full_crawl_summary(result):
         )
         return
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         metric_card("Страниц обойдено", result.get("crawled_pages_count", len(crawled_pages)), "Полный обход", "#2563eb")
@@ -127,9 +111,6 @@ def render_full_crawl_summary(result):
         metric_card("Битых ссылок", result.get("broken_links_total", 0), "Недоступные адреса", "#dc2626")
     with col4:
         metric_card("Редиректов", len(redirects), "Найденные цепочки", "#f59e0b")
-    with col5:
-        metric_card("Alt у картинок", average_image_alt_coverage(crawled_pages), "Заполненность", "#7c3aed")
-
     kv_card(
         "Параметры полного обхода",
         [
@@ -201,15 +182,6 @@ def error_intelligence(error):
             "fix": "Keep redirects direct, avoid loops, and point old URLs to the final destination in one hop.",
         },
         {
-            "markers": ["images without alt", "изображений без alt", "alt"],
-            "category": "Images",
-            "severity": "recommendation",
-            "class": "ts-severity-recommendation",
-            "explanation": "Some images do not have alternative text.",
-            "why": "Alt text improves accessibility and gives crawlers additional context for visual content.",
-            "fix": "Add concise, descriptive alt text to meaningful images; leave decorative images empty intentionally.",
-        },
-        {
             "markers": ["robots"],
             "category": "Robots.txt",
             "severity": "critical",
@@ -278,12 +250,6 @@ def build_error_center_items(result):
 
         if len(chain) > 1:
             items.append(f"Redirect chain: {redirect.get('url', '')} has {len(chain)} hops")
-
-    for page in result.get("crawled_pages", []):
-        coverage = page.get("image_alt_coverage")
-
-        if coverage is not None and coverage < 100:
-            items.append(f"Low image alt coverage: {page.get('url', '')} has {coverage}% alt coverage")
 
     for item in result.get("canonical_report", []):
         if item.get("status") == "missing":
@@ -955,17 +921,14 @@ def reviews_sources(yandex_reviews_url, google_reviews_url, twogis_reviews_url):
 
 def render_audit_sections(url, result, score, errors_count, yandex_reviews_url, google_reviews_url, twogis_reviews_url):
     ai_summary = generate_ai_summary(score, errors_count)
-    score_risk = get_score_risk(score)
 
-    section_header("SEO-сводка", "Общая оценка, риск и рекомендации по текущему аудиту.")
-    col1, col2, col3 = st.columns(3)
+    section_header("Сводка аудита", "Короткое объяснение результата и рекомендации по текущему аудиту.")
+    col1, col2 = st.columns(2)
 
     with col1:
-        metric_card("SEO-оценка", f"{score}/100", "Единая оценка аудита", "#2563eb")
-    with col2:
         metric_card("Ошибок", errors_count, "Найдено crawler", "#dc2626")
-    with col3:
-        risk_card(score, ai_summary["risk"], score_risk["color"])
+    with col2:
+        metric_card("Статус", ai_summary["risk"], "Итоговая оценка", "#f59e0b")
 
     st.info(ai_summary["summary"])
     warnings_block(result.get("crawler_warnings", []))
@@ -1099,15 +1062,13 @@ def render_monthly_job_status(job):
 
     st.progress(progress)
 
-    cols = st.columns(4)
+    cols = st.columns(3)
     with cols[0]:
         metric_card("Статус", status_label, "Фоновый аудит", "#f59e0b")
     with cols[1]:
         metric_card("Прогресс", f"{progress}%", "Можно уйти со страницы", "#2563eb")
     with cols[2]:
         metric_card("Время запуска", job.get("created_at") or "—", "Сохранено в sqlite", "#7c3aed")
-    with cols[3]:
-        metric_card("Task ID", job.get("task_id") or "—", "Celery", "#0f766e")
 
     if job.get("status") == "error":
         st.error(job.get("error_message") or "Аудит завершился с ошибкой.")
@@ -1148,14 +1109,16 @@ def show_monthly_audit_page():
         unsafe_allow_html=True
     )
 
+    date_part, time_part = (str(audit_date).split(" ", 1) + ["—"])[:2] if audit_date != "Аудит еще не запускался" else ("—", "—")
+
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        metric_card("Выбранный сайт", site_name, url, "#0f766e")
+        metric_card("Сайт", site_name, url, "#0f766e")
     with col2:
-        metric_card("SEO-оценка", f"{score}/100", "Последний результат", "#2563eb")
+        metric_card("Дата", date_part, "Последний запуск", "#2563eb")
     with col3:
-        metric_card("Дата аудита", audit_date, "Последний запуск", "#7c3aed")
+        metric_card("Время", time_part, "Последний запуск", "#7c3aed")
     with col4:
         metric_card("Статус", audit_status, "Фоновый аудит", "#f59e0b")
 
@@ -1185,7 +1148,8 @@ def show_monthly_audit_page():
 
     render_monthly_job_status(latest_job)
 
-    if st.button("Обновить статус", use_container_width=True):
+    if latest_job and latest_job.get("status") in ("queued", "running"):
+        time.sleep(5)
         st.rerun()
 
     if not audit_data:

@@ -211,10 +211,7 @@ def show_add_site_form(user_id):
             )
 
         with col2:
-            google_property = st.text_input(
-                "Google Search Console Property",
-                placeholder="https://example.ru/"
-            )
+            google_property = ""
             yandex_reviews_url = st.text_input(
                 "Яндекс.Карты",
                 placeholder="https://yandex.ru/maps/org/..."
@@ -329,19 +326,7 @@ def show_sites_page():
                 with column:
                     site_card(site, audits_by_url.get(site[2]))
 
-                    action_cols = st.columns(4)
-
-                    with action_cols[0]:
-                        if st.button("Monthly", key=f"monthly_{site[0]}", use_container_width=True):
-                            st.info("Откройте раздел «Ежемесячный аудит» и выберите этот сайт.")
-                    with action_cols[1]:
-                        if st.button("Quarterly", key=f"quarterly_{site[0]}", use_container_width=True):
-                            st.info("Откройте раздел «Ежеквартальный аудит» и выберите этот сайт.")
-                    with action_cols[2]:
-                        st.link_button("Открыть", site[2], use_container_width=True)
-                    with action_cols[3]:
-                        if st.button("Удалить", key=f"delete_{site[0]}", use_container_width=True):
-                            st.warning("Удаление подготовлено в UI. Для реального удаления нужен следующий маленький шаг в database/db.py.")
+                    st.link_button("Открыть сайт", site[2], use_container_width=True)
 
     section_header(
         "Интеграции",
