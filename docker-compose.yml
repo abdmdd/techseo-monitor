@@ -17,6 +17,10 @@ services:
     depends_on:
       - redis
 
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+
   api:
 
     build: .
@@ -33,6 +37,10 @@ services:
 
     depends_on:
       - redis
+
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
 
   redis:
 
@@ -56,3 +64,7 @@ services:
 
     depends_on:
       - redis
+
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0

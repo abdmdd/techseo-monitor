@@ -67,7 +67,7 @@ current_user = get_current_user()
 
 st.markdown('<div class="ts-page-title">TechSEO Monitor</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="ts-page-subtitle">Автоматический мониторинг технического SEO, индексации, отзывов и мета-тегов</div>',
+    '<div class="ts-page-subtitle">Понятный мониторинг технического SEO, индексации, ошибок и мета-тегов для владельца бизнеса</div>',
     unsafe_allow_html=True
 )
 
@@ -82,16 +82,16 @@ if st.sidebar.button("Выйти", use_container_width=True):
     logout()
 
 st.sidebar.divider()
-st.sidebar.caption("Основные рабочие разделы MVP")
+st.sidebar.caption("Основные разделы")
 
 menu = st.sidebar.radio(
     "Раздел",
     [
-        "Дашборд",
+        "Главная",
         "Мои сайты",
         "Ежемесячный аудит",
         "Ежеквартальный аудит",
-        "Генерация мета-тегов",
+        "Нейросети",
         "Конкуренты",
         "История проверок",
         "PDF-отчеты",
@@ -101,13 +101,13 @@ menu = st.sidebar.radio(
 )
 
 st.sidebar.divider()
-st.sidebar.caption("TechSEO Monitor - версия для диплома")
+st.sidebar.caption("TechSEO Monitor - спокойный SEO-контроль")
 
 # ==================================================
 # ROUTING
 # ==================================================
 
-if menu == "Дашборд":
+if menu == "Главная":
     show_dashboard()
 elif menu == "Мои сайты":
     show_sites_page()
@@ -115,7 +115,7 @@ elif menu == "Ежемесячный аудит":
     show_monthly_audit_page()
 elif menu == "Ежеквартальный аудит":
     show_quarterly_audit_page()
-elif menu == "Генерация мета-тегов":
+elif menu == "Нейросети":
     show_meta_generator_page()
 elif menu == "Конкуренты":
     show_competitors_page()

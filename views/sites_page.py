@@ -68,7 +68,7 @@ def site_card(site, audit):
             <span class="ts-status-chip {status_class}">{escape(status)}</span>
             <div class="ts-site-grid">
                 <div class="ts-site-stat">
-                    <div class="ts-site-stat-label">SEO score</div>
+                    <div class="ts-site-stat-label">SEO-оценка</div>
                     <div class="ts-site-stat-value">{escape(score_label)}</div>
                 </div>
                 <div class="ts-site-stat">
@@ -257,7 +257,7 @@ def show_empty_state():
         <div class="ts-empty-state">
             <div class="ts-card-title">Сайтов пока нет</div>
             <div class="ts-card-text">
-                Добавьте первый сайт, чтобы запускать аудиты, отслеживать SEO score и подключать поисковые интеграции.
+                🌸 Добавьте первый сайт, чтобы запускать аудиты, отслеживать SEO-оценку и подключать поисковые интеграции.
             </div>
         </div>
         """,
@@ -278,7 +278,7 @@ def show_sites_page():
     average_score = round(sum(scores) / len(scores), 1) if scores else "—"
     total_errors = sum(audit[4] for audit in history[:5]) if history else 0
     summary = (
-        f"Средний SEO score: {average_score}. Ошибок в последних аудитах: {total_errors}."
+        f"Средняя SEO-оценка: {average_score}. Ошибок в последних аудитах: {total_errors}."
         if history
         else "Добавьте сайт и запустите первый аудит, чтобы увидеть SEO summary."
     )

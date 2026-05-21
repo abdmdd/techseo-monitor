@@ -1,73 +1,13 @@
 from html import escape
-from urllib.parse import urlparse
 
 import pandas as pd
 import streamlit as st
 
 from components.ui_helpers import compact_note, metric_card
+from services.competitor_service import discover_competitors
 
 
-DEFAULT_COMPETITORS = [
-    {
-        "domain": "auditlab.ru",
-        "seo_score": 86,
-        "visibility_score": 74,
-        "top10_keywords": 128,
-        "similarity_score": 82,
-        "seo_overlap": 68,
-        "top_pages": ["/seo-audit", "/technical-seo", "/pricing"],
-        "title_preview": "SEO audit platform for growing teams",
-        "description_preview": "Technical SEO checks, monitoring, reports, and recommendations for product teams.",
-        "keyword_overlap": ["seo audit", "technical seo", "site monitoring", "meta tags"],
-    },
-    {
-        "domain": "rankpilot.io",
-        "seo_score": 78,
-        "visibility_score": 61,
-        "top10_keywords": 92,
-        "similarity_score": 76,
-        "seo_overlap": 55,
-        "top_pages": ["/tools/site-audit", "/keywords", "/reports"],
-        "title_preview": "Rank tracking and website audit suite",
-        "description_preview": "Keyword visibility, site health tracking, and clean SEO reports in one workspace.",
-        "keyword_overlap": ["rank tracking", "seo reports", "crawler", "broken links"],
-    },
-    {
-        "domain": "webmasterpro.ru",
-        "seo_score": 81,
-        "visibility_score": 67,
-        "top10_keywords": 104,
-        "similarity_score": 71,
-        "seo_overlap": 59,
-        "top_pages": ["/audit", "/sitemap-checker", "/robots-txt"],
-        "title_preview": "Инструменты для технического SEO",
-        "description_preview": "Проверка sitemap, robots.txt, ошибок индексации и технических факторов сайта.",
-        "keyword_overlap": ["sitemap", "robots txt", "technical audit", "canonical"],
-    },
-    {
-        "domain": "serpmetrics.ai",
-        "seo_score": 73,
-        "visibility_score": 53,
-        "top10_keywords": 74,
-        "similarity_score": 64,
-        "seo_overlap": 47,
-        "top_pages": ["/ai-meta-generator", "/competitors", "/analytics"],
-        "title_preview": "AI SEO intelligence and competitor research",
-        "description_preview": "SERP insights, competitor discovery, AI metadata, and visibility analytics.",
-        "keyword_overlap": ["ai seo", "competitor analysis", "meta generator", "serp api"],
-    },
-]
-
-
-def _domain_from_url(url: str) -> str:
-    value = (url or "").strip()
-    if not value:
-        return "your-site.ru"
-    parsed = urlparse(value if "://" in value else f"https://{value}")
-    return parsed.netloc or parsed.path or "your-site.ru"
-
-
-def _section_header(title: str, subtitle: str = ""):
+def section_header(title, subtitle=""):
     st.markdown(
         f"""
         <div class="ts-dashboard-section">
@@ -79,115 +19,74 @@ def _section_header(title: str, subtitle: str = ""):
     )
 
 
-def generate_mock_competitors(site_url: str, keywords: str):
-    """Temporary discovery layer for future SERP/API integrations."""
-    own_domain = _domain_from_url(site_url)
-    terms = [term.strip().lower() for term in (keywords or "").replace("\n", ",").split(",") if term.strip()]
-    competitors = []
+def keyword_chips(keywords):
+    if not keywords:
+        return '<span class="ts-meta-issue-chip">Ключевые слова пока не выделены</span>'
 
-    for index, item in enumerate(DEFAULT_COMPETITORS):
-        competitor = dict(item)
-        boost = min(8, len(terms) * 2)
-        competitor["visibility_score"] = min(99, competitor["visibility_score"] + boost - index)
-        competitor["similarity_score"] = min(99, competitor["similarity_score"] + max(0, boost - 2))
-        competitor["seo_overlap"] = min(99, competitor["seo_overlap"] + max(0, len(terms)))
-        competitor["discovery_source"] = "Mock SERP layer"
-        competitor["target_domain"] = own_domain
-        competitor["seed_keywords"] = terms[:6]
-        competitors.append(competitor)
-
-    return competitors
+    return "".join(
+        f'<span class="ts-keyword-chip">{escape(str(keyword))}</span>'
+        for keyword in keywords[:12]
+    )
 
 
-def _score_color(score: int) -> str:
-    if score >= 80:
-        return "#16a34a"
-    if score >= 60:
-        return "#f59e0b"
-    return "#dc2626"
-
-
-def _competitor_card(competitor: dict):
-    domain = competitor.get("domain", "")
-    score = int(competitor.get("seo_score", 0))
-    top_pages = competitor.get("top_pages", [])
-    keyword_overlap = competitor.get("keyword_overlap", [])
-    top_pages_html = "".join(f"<li>{escape(page)}</li>" for page in top_pages[:3])
-    keywords_html = "".join(f'<span class="ts-keyword-chip">{escape(keyword)}</span>' for keyword in keyword_overlap[:5])
+def competitor_card(competitor):
+    chips = keyword_chips(competitor.get("overlap_keywords", []))
 
     st.markdown(
         f"""
         <div class="ts-competitor-card">
             <div class="ts-competitor-head">
                 <div>
-                    <div class="ts-site-domain">{escape(domain)}</div>
-                    <div class="ts-card-text">Источник: {escape(competitor.get("discovery_source", "Mock"))}</div>
+                    <div class="ts-site-domain">{escape(competitor.get("domain", ""))}</div>
+                    <div class="ts-card-text">{escape(competitor.get("theme", ""))}</div>
                 </div>
-                <span class="ts-score-chip" style="background:{_score_color(score)};">SEO {score}</span>
+                <span class="ts-score-chip" style="background:#2563eb;">Пересечение {escape(str(competitor.get("overlap_score", 0)))}%</span>
             </div>
-            <div class="ts-site-grid">
-                <div class="ts-site-stat">
-                    <div class="ts-site-stat-label">Visibility</div>
-                    <div class="ts-site-stat-value">{escape(str(competitor.get("visibility_score", 0)))}%</div>
-                </div>
-                <div class="ts-site-stat">
-                    <div class="ts-site-stat-label">TOP10</div>
-                    <div class="ts-site-stat-value">{escape(str(competitor.get("top10_keywords", 0)))}</div>
-                </div>
-                <div class="ts-site-stat">
-                    <div class="ts-site-stat-label">Similarity</div>
-                    <div class="ts-site-stat-value">{escape(str(competitor.get("similarity_score", 0)))}%</div>
-                </div>
-                <div class="ts-site-stat">
-                    <div class="ts-site-stat-label">SEO overlap</div>
-                    <div class="ts-site-stat-value">{escape(str(competitor.get("seo_overlap", 0)))}%</div>
-                </div>
-            </div>
-            <div class="ts-card-title">Title preview</div>
-            <div class="ts-card-text">{escape(competitor.get("title_preview", ""))}</div>
-            <div class="ts-card-title" style="margin-top:10px;">Description preview</div>
-            <div class="ts-card-text">{escape(competitor.get("description_preview", ""))}</div>
-            <div class="ts-card-title" style="margin-top:12px;">Top pages</div>
-            <ul class="ts-compact-list">{top_pages_html}</ul>
-            <div class="ts-keyword-row">{keywords_html}</div>
+            <div class="ts-card-title">Title</div>
+            <div class="ts-card-text">{escape(competitor.get("title", ""))}</div>
+            <div class="ts-card-title" style="margin-top:10px;">Description</div>
+            <div class="ts-card-text">{escape(competitor.get("description", ""))}</div>
+            <div class="ts-card-title" style="margin-top:12px;">Общие ключевые слова</div>
+            <div class="ts-keyword-row">{chips}</div>
+            <div class="ts-card-text" style="margin-top:12px;">Источник: {escape(competitor.get("discovery_source", ""))}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def _comparison_dataframe(competitors):
+def profile_card(profile):
+    st.markdown(
+        f"""
+        <div class="ts-audit-section-card">
+            <div class="ts-card-title">Анализ вашего сайта</div>
+            <div class="ts-audit-kv"><span>Домен</span><strong>{escape(profile.get("domain", ""))}</strong></div>
+            <div class="ts-audit-kv"><span>Статус загрузки</span><strong>{escape(profile.get("fetch_status", ""))}</strong></div>
+            <div class="ts-audit-kv"><span>Title</span><strong>{escape(profile.get("title", "") or "не найден")}</strong></div>
+            <div class="ts-audit-kv"><span>Description</span><strong>{escape(profile.get("description", "") or "не найден")}</strong></div>
+            <div class="ts-audit-kv"><span>H1</span><strong>{escape(profile.get("h1", "") or "не найден")}</strong></div>
+            <div class="ts-keyword-row">{keyword_chips(profile.get("keywords", []))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if profile.get("fetch_error"):
+        st.warning(profile["fetch_error"])
+
+
+def comparison_dataframe(competitors):
     return pd.DataFrame(
         [
             {
-                "Competitor": item["domain"],
-                "SEO score": item["seo_score"],
-                "Visibility": f"{item['visibility_score']}%",
-                "TOP10 keywords": item["top10_keywords"],
-                "Similarity": f"{item['similarity_score']}%",
-                "SEO overlap": f"{item['seo_overlap']}%",
+                "Конкурент": item.get("domain", ""),
+                "Тематика": item.get("theme", ""),
+                "Пересечение": f"{item.get('overlap_score', 0)}%",
+                "Общие ключи": ", ".join(item.get("overlap_keywords", [])) or "нет",
+                "Title": item.get("title", ""),
             }
             for item in competitors
         ]
-    )
-
-
-def _chart_placeholder(title: str, body: str):
-    st.markdown(
-        f"""
-        <div class="ts-chart-placeholder">
-            <div class="ts-card-title">{escape(title)}</div>
-            <div class="ts-card-text">{escape(body)}</div>
-            <div class="ts-placeholder-bars">
-                <span style="height: 54%;"></span>
-                <span style="height: 78%;"></span>
-                <span style="height: 42%;"></span>
-                <span style="height: 66%;"></span>
-                <span style="height: 88%;"></span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
     )
 
 
@@ -198,127 +97,113 @@ def show_competitors_page():
             <div>
                 <div class="ts-saas-hero-title">Конкуренты</div>
                 <div class="ts-saas-hero-subtitle">
-                    Центр конкурентного SEO-анализа: discovery, visibility, keyword overlap и подготовка к будущим SERP/API интеграциям.
+                    MVP-анализ конкурентов: анализируем главную страницу, выделяем тематику и показываем
+                    предполагаемых конкурентов по пересечению ключевых слов.
                 </div>
             </div>
-            <div class="ts-saas-pill">SERP architecture ready</div>
+            <div class="ts-saas-pill">Готово к парсеру выдачи</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    with st.container():
-        col_site, col_keywords, col_button = st.columns([1.1, 1.4, 0.55])
-        with col_site:
-            site_url = st.text_input("Ваш сайт", placeholder="https://example.ru", key="competitor_site_url")
-        with col_keywords:
-            keywords = st.text_input("Ниша / ключевые слова", placeholder="seo аудит, техническое seo, sitemap", key="competitor_keywords")
-        with col_button:
-            st.write("")
-            st.write("")
-            discover = st.button("Найти", use_container_width=True, type="primary")
+    col_site, col_keywords, col_button = st.columns([1.15, 1.45, 0.5])
+    with col_site:
+        site_url = st.text_input("Ваш сайт", placeholder="https://example.ru", key="competitor_site_url")
+    with col_keywords:
+        keywords = st.text_input(
+            "Ниша / ключевые слова",
+            placeholder="seo аудит, техническое seo, интернет-магазин",
+            key="competitor_keywords",
+        )
+    with col_button:
+        st.write("")
+        st.write("")
+        run_analysis = st.button("Анализировать", type="primary", use_container_width=True)
 
-    if discover or "competitors_result" not in st.session_state:
-        st.session_state["competitors_result"] = generate_mock_competitors(site_url, keywords)
+    if run_analysis:
+        with st.spinner("Анализируем главную страницу и подбираем предполагаемых конкурентов..."):
+            st.session_state["competitor_intelligence"] = discover_competitors(site_url, keywords)
 
-    competitors = st.session_state.get("competitors_result", [])
+    data = st.session_state.get("competitor_intelligence")
 
-    if not competitors:
+    if not data:
         st.markdown(
             """
             <div class="ts-empty-state">
-                Укажите сайт и нишу, чтобы подготовить конкурентный срез. Сейчас используется mock discovery layer, позже сюда подключится SERP/API источник.
+                🌸 Введите сайт и несколько слов о нише. Раздел проанализирует title, description, H1,
+                выделит ключевые слова и покажет предполагаемых конкурентов.
             </div>
             """,
             unsafe_allow_html=True,
         )
         return
 
-    avg_visibility = round(sum(item["visibility_score"] for item in competitors) / len(competitors))
-    avg_score = round(sum(item["seo_score"] for item in competitors) / len(competitors))
-    avg_overlap = round(sum(item["seo_overlap"] for item in competitors) / len(competitors))
+    profile = data["site_profile"]
+    competitors = data["competitors"]
+    summary = data["summary"]
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        metric_card("Конкурентов", len(competitors), "Mock discovery", "#2563eb")
+        metric_card("Конкурентов", summary["competitors_found"], "Предполагаемый подбор", "#2563eb")
     with col2:
-        metric_card("Avg visibility", f"{avg_visibility}%", "Оценка видимости", "#0f766e")
+        metric_card("Ключей сайта", summary["site_keywords_count"], "Из title, description, H1", "#0f766e")
     with col3:
-        metric_card("Avg SEO score", avg_score, "Среднее качество", _score_color(avg_score))
+        metric_card("Общих ключей", summary["overlap_keywords_count"], "Пересечение тематики", "#7c3aed")
     with col4:
-        metric_card("Avg overlap", f"{avg_overlap}%", "Пересечение семантики", "#7c3aed")
+        metric_card("Лучшее совпадение", f"{summary['best_overlap']}%", "Оценка пересечения", "#f59e0b")
 
-    _section_header("Competitor cards", "Карточки конкурентов с ключевыми метриками, превью сниппетов и top pages.")
-    rows = [competitors[index : index + 2] for index in range(0, len(competitors), 2)]
+    section_header(
+        "Профиль сайта",
+        "SEO-помощник смотрит на главную страницу и выделяет смысловые сигналы для подбора конкурентов.",
+    )
+    profile_card(profile)
+
+    section_header(
+        "Предполагаемые конкуренты",
+        "Это MVP-подбор без внешней выдачи: он показывает близкие тематические профили и готов к подключению парсера выдачи.",
+    )
+    rows = [competitors[index:index + 2] for index in range(0, len(competitors), 2)]
     for row in rows:
         cols = st.columns(2)
         for col, competitor in zip(cols, row):
             with col:
-                _competitor_card(competitor)
+                competitor_card(competitor)
 
-    _section_header("Comparison table", "Единая таблица для будущего SERP/API слоя и экспорта в отчеты.")
-    st.dataframe(_comparison_dataframe(competitors), use_container_width=True, hide_index=True)
+    section_header("Анализ пересечений", "Сводная таблица пересечений по ключевым словам и тематике.")
+    st.dataframe(comparison_dataframe(competitors), width="stretch", hide_index=True, height=280)
 
-    _section_header("Visibility & keyword overlap", "Плейсхолдеры графиков: структура готова для подключения реальных данных.")
-    chart_col1, chart_col2 = st.columns(2)
-    with chart_col1:
-        _chart_placeholder("Visibility dynamics", "Будущий график изменения видимости конкурентов по неделям.")
-    with chart_col2:
-        _chart_placeholder("Keyword overlap", "Будущая визуализация пересечения TOP10 ключей и страниц.")
+    section_header("Пересечение ключевых слов", "Общие темы, по которым конкуренты похожи на ваш сайт.")
+    overlap_keywords = data.get("overlap_keywords", [])
+    st.markdown(
+        f"""
+        <div class="ts-audit-section-card">
+            <div class="ts-card-title">Общие ключевые слова</div>
+            <div class="ts-card-text">Эти слова помогут позже построить запросы к поисковой выдаче, анализ видимости и реальные конкурентные кластеры.</div>
+            <div class="ts-keyword-row">{keyword_chips(overlap_keywords)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    _section_header("Keyword overlap blocks", "Семантические кластеры, где конкуренты пересекаются с вашим сайтом.")
-    keyword_cols = st.columns(2)
-    for index, competitor in enumerate(competitors):
-        chips = "".join(
-            f'<span class="ts-keyword-chip">{escape(keyword)}</span>'
-            for keyword in competitor.get("keyword_overlap", [])
-        )
-        with keyword_cols[index % 2]:
+    section_header("Архитектура будущего анализа", "Слой уже разделен так, чтобы позже подключить реальные данные.")
+    arch_col1, arch_col2, arch_col3 = st.columns(3)
+    architecture = [
+        ("Парсер выдачи", "Будущий модуль получит реальные домены из поисковой выдачи по ключевым словам."),
+        ("Анализ видимости", "Будущий расчет видимости покажет, кто чаще встречается в TOP10."),
+        ("Кластеры ключей", "Будущая кластеризация сгруппирует запросы по темам и намерению пользователя."),
+    ]
+    for column, (title, text) in zip([arch_col1, arch_col2, arch_col3], architecture):
+        with column:
             st.markdown(
                 f"""
-                <div class="ts-audit-section-card">
-                    <div class="ts-card-title">{escape(competitor["domain"])}</div>
-                    <div class="ts-card-text">Пересечение по ключам и intent-блокам.</div>
-                    <div class="ts-keyword-row">{chips}</div>
+                <div class="ts-feature-card">
+                    <div class="ts-feature-icon">CI</div>
+                    <div class="ts-card-title">{escape(title)}</div>
+                    <div class="ts-card-text">{escape(text)}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-    _section_header("SERP/API architecture", "Пока без внешнего API: только подготовленные контуры будущей интеграции.")
-    arch_col1, arch_col2, arch_col3 = st.columns(3)
-    with arch_col1:
-        st.markdown(
-            """
-            <div class="ts-feature-card">
-                <div class="ts-feature-icon">S</div>
-                <div class="ts-card-title">SERP Provider</div>
-                <div class="ts-card-text">Будущий адаптер для поисковой выдачи, регионов, устройств и частоты обновления.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with arch_col2:
-        st.markdown(
-            """
-            <div class="ts-feature-card">
-                <div class="ts-feature-icon">K</div>
-                <div class="ts-card-title">Keyword Clusters</div>
-                <div class="ts-card-text">Слой кластеризации ключей, intent-групп и пересечений с конкурентами.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with arch_col3:
-        st.markdown(
-            """
-            <div class="ts-feature-card">
-                <div class="ts-feature-icon">A</div>
-                <div class="ts-card-title">API Tokens</div>
-                <div class="ts-card-text">Подготовка к безопасному хранению токенов и статусам синхронизации.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    compact_note("Данные на странице сейчас mock-based: backend crawler, sqlite, auth, FastAPI и текущий audit flow не затрагиваются.")
+    compact_note("Раздел не меняет crawler, Celery, sqlite, auth и FastAPI. Это отдельный MVP-слой конкурентного анализа для будущей выдачи и видимости.")

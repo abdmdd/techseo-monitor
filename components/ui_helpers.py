@@ -244,7 +244,8 @@ def apply_global_styles():
 
             .ts-action-card,
             .ts-audit-card,
-            .ts-feature-card {
+            .ts-feature-card,
+            .ts-step-card {
                 background: var(--ts-surface);
                 border: 1px solid var(--ts-border);
                 border-radius: 10px;
@@ -256,10 +257,68 @@ def apply_global_styles():
 
             .ts-action-card:hover,
             .ts-audit-card:hover,
-            .ts-feature-card:hover {
+            .ts-feature-card:hover,
+            .ts-step-card:hover {
                 transform: translateY(-2px);
                 border-color: #bfdbfe;
                 box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+            }
+
+            .ts-step-number {
+                width: 34px;
+                height: 34px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 999px;
+                background: #dcfce7;
+                color: #166534;
+                font-size: 15px;
+                font-weight: 900;
+                margin-bottom: 10px;
+            }
+
+            .ts-motivation-shell {
+                max-width: 720px;
+                margin: 16px auto 4px auto;
+                text-align: center;
+            }
+
+            .ts-motivation-card {
+                background:
+                    linear-gradient(135deg, rgba(236, 72, 153, 0.10), rgba(14, 165, 233, 0.08)),
+                    #ffffff;
+                border: 1px solid var(--ts-border);
+                border-radius: 14px;
+                padding: 18px;
+                box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+            }
+
+            .ts-motivation-image {
+                width: 100%;
+                max-width: 520px;
+                max-height: 360px;
+                object-fit: cover;
+                border-radius: 12px;
+                border: 1px solid #e2e8f0;
+                box-shadow: 0 10px 24px rgba(15, 23, 42, 0.10);
+                margin: 0 auto 14px auto;
+                display: block;
+            }
+
+            .ts-motivation-emoji {
+                font-size: 28px;
+                line-height: 1;
+                margin-bottom: 8px;
+            }
+
+            .ts-motivation-text {
+                color: var(--ts-text);
+                font-size: 18px;
+                line-height: 1.45;
+                font-weight: 850;
+                max-width: 560px;
+                margin: 0 auto;
             }
 
             .ts-action-icon,
@@ -887,6 +946,166 @@ def apply_global_styles():
                 color: #334155;
                 font-size: 13px;
                 line-height: 1.4;
+            }
+
+            .ts-assistant-card {
+                border-left: 4px solid #2563eb;
+            }
+
+            .ts-assistant-eyebrow {
+                color: var(--ts-muted);
+                font-size: 11px;
+                font-weight: 850;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+                margin-bottom: 5px;
+            }
+
+            .ts-assistant-url-list {
+                margin: 0;
+                padding-left: 18px;
+                color: #334155;
+                font-size: 12px;
+                line-height: 1.45;
+                overflow-wrap: anywhere;
+            }
+
+            .ts-meta-pro-card {
+                background: #ffffff;
+                border: 1px solid var(--ts-border);
+                border-radius: 10px;
+                padding: 15px;
+                margin-bottom: 12px;
+                box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+                transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+            }
+
+            .ts-meta-pro-card:hover {
+                transform: translateY(-2px);
+                border-color: #bfdbfe;
+                box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+            }
+
+            .ts-meta-pro-url {
+                color: var(--ts-text);
+                font-size: 14px;
+                font-weight: 850;
+                overflow-wrap: anywhere;
+                margin-bottom: 10px;
+            }
+
+            .ts-meta-pro-grid {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 10px;
+                margin-top: 10px;
+            }
+
+            .ts-meta-pro-field {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 10px;
+                min-height: 102px;
+            }
+
+            .ts-meta-pro-label {
+                color: var(--ts-muted);
+                font-size: 11px;
+                font-weight: 850;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+                margin-bottom: 5px;
+            }
+
+            .ts-meta-pro-text {
+                color: #334155;
+                font-size: 13px;
+                line-height: 1.42;
+                overflow-wrap: anywhere;
+            }
+
+            .ts-meta-issue-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 7px;
+                margin-top: 12px;
+            }
+
+            .ts-meta-issue-chip {
+                display: inline-flex;
+                align-items: center;
+                border-radius: 999px;
+                padding: 4px 9px;
+                font-size: 12px;
+                font-weight: 850;
+                border: 1px solid #e2e8f0;
+                background: #f8fafc;
+                color: #334155;
+            }
+
+            .ts-technical-pro-card {
+                background: #ffffff;
+                border: 1px solid var(--ts-border);
+                border-radius: 10px;
+                padding: 16px;
+                margin-bottom: 12px;
+                box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+                transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+            }
+
+            .ts-technical-pro-card:hover {
+                transform: translateY(-2px);
+                border-color: #99f6e4;
+                box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+            }
+
+            .ts-technical-head {
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+                gap: 12px;
+                margin-bottom: 12px;
+            }
+
+            .ts-technical-grid {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 10px;
+                margin-top: 12px;
+            }
+
+            .ts-technical-content {
+                background: #0f172a;
+                color: #e2e8f0;
+                border-radius: 8px;
+                padding: 12px;
+                font-size: 12px;
+                line-height: 1.45;
+                white-space: pre-wrap;
+                overflow-x: auto;
+                max-height: 300px;
+            }
+
+            .ts-chain-list {
+                display: flex;
+                flex-direction: column;
+                gap: 7px;
+                margin-top: 10px;
+            }
+
+            .ts-chain-hop {
+                display: grid;
+                grid-template-columns: 1fr auto 1fr;
+                gap: 10px;
+                align-items: center;
+                color: #334155;
+                font-size: 12px;
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 8px 10px;
+                overflow-wrap: anywhere;
             }
 
             .ts-severity-critical {

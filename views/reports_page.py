@@ -10,7 +10,7 @@ from services.score_service import calculate_seo_score, get_errors_count
 def show_reports_page():
     page_header(
         "PDF SEO-отчеты",
-        "Быстрая генерация PDF на основе текущего crawler и единого SEO score."
+        "Быстрая генерация PDF на основе текущего краулера и единой SEO-оценки."
     )
 
     url = st.text_input(
@@ -36,7 +36,7 @@ def show_reports_page():
             status.update(label="PDF-отчет готов", state="complete")
 
         st.success("PDF-отчет успешно создан")
-        st.caption(f"SEO Score: {score}/100 · Ошибок: {errors_count}")
+        st.caption(f"SEO-оценка: {score}/100 · Ошибок: {errors_count}")
         warnings_block(result.get("crawler_warnings", []))
 
         with open(pdf_file, "rb") as file:

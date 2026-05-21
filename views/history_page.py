@@ -24,7 +24,7 @@ def show_history_page():
             "ID",
             "URL",
             "Тип аудита",
-            "SEO Score",
+            "SEO-оценка",
             "Ошибок",
             "Title",
             "Description",
@@ -36,26 +36,26 @@ def show_history_page():
         ]
     )
 
-    latest_score = df.iloc[0]["SEO Score"]
-    average_score = round(df["SEO Score"].mean(), 1)
-    max_score = df["SEO Score"].max()
+    latest_score = df.iloc[0]["SEO-оценка"]
+    average_score = round(df["SEO-оценка"].mean(), 1)
+    max_score = df["SEO-оценка"].max()
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        metric_card("Последний SEO Score", latest_score, "Свежий аудит", "#2563eb")
+        metric_card("Последняя SEO-оценка", latest_score, "Свежий аудит", "#2563eb")
     with col2:
-        metric_card("Средний SEO Score", average_score, "По всей истории", "#0f766e")
+        metric_card("Средняя SEO-оценка", average_score, "По всей истории", "#0f766e")
     with col3:
-        metric_card("Лучший SEO Score", max_score, "Максимальное значение", "#16a34a")
+        metric_card("Лучшая SEO-оценка", max_score, "Максимальное значение", "#16a34a")
 
     st.divider()
     st.subheader("Последние аудиты")
     st.dataframe(df, width="stretch", height=360, hide_index=True)
 
     st.divider()
-    st.subheader("Динамика SEO Health Score")
-    score_chart = df[["Дата", "SEO Score"]].copy().sort_values(by="Дата")
+    st.subheader("Динамика SEO-оценки")
+    score_chart = df[["Дата", "SEO-оценка"]].copy().sort_values(by="Дата")
     st.line_chart(score_chart.set_index("Дата"), height=260)
 
     st.divider()

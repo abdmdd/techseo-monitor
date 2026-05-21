@@ -14,7 +14,7 @@ CHECKLIST = {
             "id": "technical_full_crawl",
             "title": "Run full website crawl",
             "description": "Review crawl depth, broken links, redirects, canonical and meta coverage.",
-            "tool": "Monthly Audit Center",
+            "tool": "Ежемесячный аудит",
             "url": "#",
         },
         {
@@ -90,7 +90,7 @@ CHECKLIST = {
             "id": "links_broken",
             "title": "Fix broken internal links",
             "description": "Prioritize 404/internal link issues found during the full crawl.",
-            "tool": "Monthly Audit Center",
+            "tool": "Ежемесячный аудит",
             "url": "#",
         },
         {
@@ -106,14 +106,14 @@ CHECKLIST = {
             "id": "content_meta",
             "title": "Refresh title and description templates",
             "description": "Review duplicate, missing and weak meta tags across crawled pages.",
-            "tool": "AI Meta Generator",
+            "tool": "Генератор meta",
             "url": "#",
         },
         {
             "id": "content_intent",
             "title": "Check search intent alignment",
-            "description": "Compare key landing pages against target queries and SERP expectations.",
-            "tool": "SERP review",
+            "description": "Сравните важные посадочные страницы с целевыми запросами и ожиданиями поисковой выдачи.",
+            "tool": "Обзор выдачи",
             "url": "#",
         },
         {

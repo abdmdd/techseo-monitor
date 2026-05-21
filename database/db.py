@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 
@@ -149,6 +150,29 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            site_id INTEGER,
+            site_url TEXT NOT NULL,
+            audit_type TEXT NOT NULL DEFAULT 'monthly',
+            task_id TEXT,
+            status TEXT NOT NULL DEFAULT 'queued',
+            progress INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            result_json TEXT,
+            seo_score INTEGER,
+            errors_count INTEGER,
+            started_at TIMESTAMP,
+            finished_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE SET NULL
+        )
+    """)
+
     migrate_sites_unique_url(cursor)
 
     if not column_exists(cursor, "sites", "user_id"):
@@ -181,9 +205,251 @@ def init_db():
         ON sites(user_id, url)
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_history_user ON audit_history(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_jobs_user_status ON audit_jobs(user_id, status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_jobs_site ON audit_jobs(site_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_jobs_task_id ON audit_jobs(task_id)")
 
     conn.commit()
     conn.close()
+
+
+def _audit_job_row_to_dict(row):
+    if not row:
+        return None
+
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "site_id": row[2],
+        "site_url": row[3],
+        "audit_type": row[4],
+        "task_id": row[5],
+        "status": row[6],
+        "progress": row[7],
+        "error_message": row[8],
+        "result": json.loads(row[9]) if row[9] else None,
+        "seo_score": row[10],
+        "errors_count": row[11],
+        "started_at": row[12],
+        "finished_at": row[13],
+        "created_at": row[14],
+        "updated_at": row[15],
+    }
+
+
+def create_audit_job(user_id, site_id, site_url, audit_type="monthly"):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO audit_jobs
+        (
+            user_id,
+            site_id,
+            site_url,
+            audit_type,
+            status,
+            progress
+        )
+        VALUES (?, ?, ?, ?, 'queued', 0)
+    """, (user_id, site_id, site_url, audit_type))
+
+    conn.commit()
+    job_id = cursor.lastrowid
+    conn.close()
+    return job_id
+
+
+def set_audit_job_task_id(job_id, task_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE audit_jobs
+        SET
+            task_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (task_id, job_id))
+
+    conn.commit()
+    conn.close()
+
+
+def update_audit_job(
+    job_id,
+    status=None,
+    progress=None,
+    error_message=None,
+    result=None,
+    seo_score=None,
+    errors_count=None,
+    started=False,
+    finished=False
+):
+    fields = ["updated_at = CURRENT_TIMESTAMP"]
+    params = []
+
+    if status is not None:
+        fields.append("status = ?")
+        params.append(status)
+
+    if progress is not None:
+        normalized_progress = max(0, min(100, int(progress)))
+        fields.append("progress = ?")
+        params.append(normalized_progress)
+
+    if error_message is not None:
+        fields.append("error_message = ?")
+        params.append(str(error_message))
+
+    if result is not None:
+        fields.append("result_json = ?")
+        params.append(json.dumps(result, ensure_ascii=False))
+
+    if seo_score is not None:
+        fields.append("seo_score = ?")
+        params.append(int(seo_score))
+
+    if errors_count is not None:
+        fields.append("errors_count = ?")
+        params.append(int(errors_count))
+
+    if started:
+        fields.append("started_at = COALESCE(started_at, CURRENT_TIMESTAMP)")
+
+    if finished:
+        fields.append("finished_at = CURRENT_TIMESTAMP")
+
+    params.append(job_id)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        UPDATE audit_jobs
+        SET {", ".join(fields)}
+        WHERE id = ?
+    """, tuple(params))
+    conn.commit()
+    conn.close()
+
+
+def get_audit_job(job_id, user_id=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            id,
+            user_id,
+            site_id,
+            site_url,
+            audit_type,
+            task_id,
+            status,
+            progress,
+            error_message,
+            result_json,
+            seo_score,
+            errors_count,
+            started_at,
+            finished_at,
+            created_at,
+            updated_at
+        FROM audit_jobs
+        WHERE id = ?
+    """
+    params = [job_id]
+
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+
+    cursor.execute(query, tuple(params))
+    row = cursor.fetchone()
+    conn.close()
+    return _audit_job_row_to_dict(row)
+
+
+def get_latest_audit_job(user_id, site_url=None, audit_type="monthly"):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            id,
+            user_id,
+            site_id,
+            site_url,
+            audit_type,
+            task_id,
+            status,
+            progress,
+            error_message,
+            result_json,
+            seo_score,
+            errors_count,
+            started_at,
+            finished_at,
+            created_at,
+            updated_at
+        FROM audit_jobs
+        WHERE user_id = ? AND audit_type = ?
+    """
+    params = [user_id, audit_type]
+
+    if site_url:
+        query += " AND site_url = ?"
+        params.append(site_url)
+
+    query += " ORDER BY id DESC LIMIT 1"
+
+    cursor.execute(query, tuple(params))
+    row = cursor.fetchone()
+    conn.close()
+    return _audit_job_row_to_dict(row)
+
+
+def get_active_audit_job(user_id, site_url=None, audit_type="monthly"):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            id,
+            user_id,
+            site_id,
+            site_url,
+            audit_type,
+            task_id,
+            status,
+            progress,
+            error_message,
+            result_json,
+            seo_score,
+            errors_count,
+            started_at,
+            finished_at,
+            created_at,
+            updated_at
+        FROM audit_jobs
+        WHERE
+            user_id = ?
+            AND audit_type = ?
+            AND status IN ('queued', 'running')
+    """
+    params = [user_id, audit_type]
+
+    if site_url:
+        query += " AND site_url = ?"
+        params.append(site_url)
+
+    query += " ORDER BY id DESC LIMIT 1"
+
+    cursor.execute(query, tuple(params))
+    row = cursor.fetchone()
+    conn.close()
+    return _audit_job_row_to_dict(row)
 
 
 def create_user(email, password_hash):
