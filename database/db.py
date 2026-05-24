@@ -185,6 +185,42 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS quarterly_audit_checks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            site_id INTEGER NOT NULL,
+            check_key TEXT NOT NULL,
+            status TEXT,
+            comment TEXT,
+            checked_at TEXT,
+            checked_by TEXT,
+            mobile_score INTEGER,
+            desktop_score INTEGER,
+            lcp REAL,
+            inp REAL,
+            cls REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS quarterly_audit_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            check_id INTEGER NOT NULL,
+            old_status TEXT,
+            new_status TEXT,
+            old_comment TEXT,
+            new_comment TEXT,
+            changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            changed_by TEXT,
+            FOREIGN KEY (check_id) REFERENCES quarterly_audit_checks(id) ON DELETE CASCADE
+        )
+    """)
+
     migrate_sites_unique_url(cursor)
 
     if not column_exists(cursor, "sites", "user_id"):
@@ -224,6 +260,18 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_jobs_site ON audit_jobs(site_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_jobs_task_id ON audit_jobs(task_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token)")
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_quarterly_checks_unique
+        ON quarterly_audit_checks(user_id, site_id, check_key)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_quarterly_checks_user_site
+        ON quarterly_audit_checks(user_id, site_id)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_quarterly_history_check
+        ON quarterly_audit_history(check_id)
+    """)
 
     conn.commit()
     conn.close()
@@ -870,4 +918,240 @@ def get_audit_history(user_id=None):
     rows = cursor.fetchall()
     conn.close()
 
+    return rows
+
+
+def _quarterly_check_row_to_dict(row):
+    if not row:
+        return None
+
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "site_id": row[2],
+        "check_key": row[3],
+        "status": row[4],
+        "comment": row[5],
+        "checked_at": row[6],
+        "checked_by": row[7],
+        "mobile_score": row[8],
+        "desktop_score": row[9],
+        "lcp": row[10],
+        "inp": row[11],
+        "cls": row[12],
+        "created_at": row[13],
+        "updated_at": row[14],
+    }
+
+
+def get_quarterly_audit_checks(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            q.id,
+            q.user_id,
+            q.site_id,
+            q.check_key,
+            q.status,
+            q.comment,
+            q.checked_at,
+            q.checked_by,
+            q.mobile_score,
+            q.desktop_score,
+            q.lcp,
+            q.inp,
+            q.cls,
+            q.created_at,
+            q.updated_at
+        FROM quarterly_audit_checks q
+        JOIN sites s ON s.id = q.site_id
+        WHERE q.user_id = ? AND s.user_id = ?
+        ORDER BY q.site_id, q.check_key
+    """, (user_id, user_id))
+
+    rows = cursor.fetchall()
+    conn.close()
+    return {
+        (row[2], row[3]): _quarterly_check_row_to_dict(row)
+        for row in rows
+    }
+
+
+def upsert_quarterly_audit_check(
+    user_id,
+    site_id,
+    check_key,
+    status,
+    comment,
+    checked_at,
+    checked_by,
+    mobile_score=None,
+    desktop_score=None,
+    lcp=None,
+    inp=None,
+    cls=None
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id FROM sites WHERE id = ? AND user_id = ?", (site_id, user_id))
+    if not cursor.fetchone():
+        conn.close()
+        return None
+
+    cursor.execute("""
+        SELECT
+            id,
+            status,
+            comment
+        FROM quarterly_audit_checks
+        WHERE user_id = ? AND site_id = ? AND check_key = ?
+    """, (user_id, site_id, check_key))
+    existing = cursor.fetchone()
+
+    normalized_status = status or "acceptable"
+    normalized_comment = comment or ""
+    normalized_checked_by = checked_by or ""
+
+    if existing:
+        check_id, old_status, old_comment = existing
+        cursor.execute("""
+            UPDATE quarterly_audit_checks
+            SET
+                status = ?,
+                comment = ?,
+                checked_at = ?,
+                checked_by = ?,
+                mobile_score = ?,
+                desktop_score = ?,
+                lcp = ?,
+                inp = ?,
+                cls = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (
+            normalized_status,
+            normalized_comment,
+            checked_at,
+            normalized_checked_by,
+            mobile_score,
+            desktop_score,
+            lcp,
+            inp,
+            cls,
+            check_id
+        ))
+
+        if (old_status or "") != normalized_status or (old_comment or "") != normalized_comment:
+            cursor.execute("""
+                INSERT INTO quarterly_audit_history
+                (
+                    check_id,
+                    old_status,
+                    new_status,
+                    old_comment,
+                    new_comment,
+                    changed_by
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                check_id,
+                old_status,
+                normalized_status,
+                old_comment,
+                normalized_comment,
+                normalized_checked_by
+            ))
+    else:
+        cursor.execute("""
+            INSERT INTO quarterly_audit_checks
+            (
+                user_id,
+                site_id,
+                check_key,
+                status,
+                comment,
+                checked_at,
+                checked_by,
+                mobile_score,
+                desktop_score,
+                lcp,
+                inp,
+                cls
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            site_id,
+            check_key,
+            normalized_status,
+            normalized_comment,
+            checked_at,
+            normalized_checked_by,
+            mobile_score,
+            desktop_score,
+            lcp,
+            inp,
+            cls
+        ))
+        check_id = cursor.lastrowid
+
+        cursor.execute("""
+            INSERT INTO quarterly_audit_history
+            (
+                check_id,
+                old_status,
+                new_status,
+                old_comment,
+                new_comment,
+                changed_by
+            )
+            VALUES (?, NULL, ?, NULL, ?, ?)
+        """, (
+            check_id,
+            normalized_status,
+            normalized_comment,
+            normalized_checked_by
+        ))
+
+    conn.commit()
+    conn.close()
+    return check_id
+
+
+def get_quarterly_audit_history(user_id, site_id=None, limit=80):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            h.id,
+            h.check_id,
+            q.site_id,
+            q.check_key,
+            h.old_status,
+            h.new_status,
+            h.old_comment,
+            h.new_comment,
+            h.changed_at,
+            h.changed_by
+        FROM quarterly_audit_history h
+        JOIN quarterly_audit_checks q ON q.id = h.check_id
+        JOIN sites s ON s.id = q.site_id
+        WHERE q.user_id = ? AND s.user_id = ?
+    """
+    params = [user_id, user_id]
+
+    if site_id is not None:
+        query += " AND q.site_id = ?"
+        params.append(site_id)
+
+    query += " ORDER BY h.id DESC LIMIT ?"
+    params.append(limit)
+
+    cursor.execute(query, tuple(params))
+    rows = cursor.fetchall()
+    conn.close()
     return rows
