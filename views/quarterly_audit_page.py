@@ -316,6 +316,37 @@ def _save_cell(user_id, site_id, check_key, user_name, has_speed=False):
     st.session_state["quarterly_audit_saved_at"] = datetime.now().strftime("%H:%M:%S")
 
 
+def _apply_date_to_site(user_id, site, selected_date, saved_checks, user_name):
+    site_id = site[0]
+
+    for check in _all_checks():
+        check_key = check["key"]
+        saved = saved_checks.get((site_id, check_key))
+        _ensure_cell_state(site_id, check, saved)
+
+        st.session_state[_state_key(site_id, check_key, "checked_at")] = selected_date
+        upsert_quarterly_audit_check(
+            user_id=user_id,
+            site_id=site_id,
+            check_key=check_key,
+            status=st.session_state.get(_state_key(site_id, check_key, "status"), "acceptable"),
+            comment=st.session_state.get(_state_key(site_id, check_key, "comment"), ""),
+            checked_at=_date_to_db(selected_date),
+            checked_by=user_name,
+            mobile_score=_safe_int(st.session_state.get(_state_key(site_id, check_key, "mobile_score")))
+            if check.get("speed")
+            else None,
+            desktop_score=_safe_int(st.session_state.get(_state_key(site_id, check_key, "desktop_score")))
+            if check.get("speed")
+            else None,
+            lcp=None,
+            inp=None,
+            cls=None,
+        )
+
+    st.session_state["quarterly_audit_saved_at"] = datetime.now().strftime("%H:%M:%S")
+
+
 def _ensure_cell_state(site_id, check, saved):
     check_key = check["key"]
     defaults = {
@@ -903,6 +934,287 @@ def _export_quarterly_excel(sites, checks_data, history_rows):
     return output.getvalue()
 
 
+def _export_quarterly_excel(sites, checks_data, history_rows):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    status_labels = {
+        "all_good": "🟢 Всё хорошо",
+        "needs_fix": "🟠 Требует правок",
+        "acceptable": "🟡 Пока терпит",
+    }
+    status_fills = {
+        "all_good": "D9EAD3",
+        "needs_fix": "FCE4D6",
+        "acceptable": "FFF2CC",
+    }
+    status_font_colors = {
+        "all_good": "166534",
+        "needs_fix": "9A3412",
+        "acceptable": "854D0E",
+    }
+
+    def parse_date(value):
+        if isinstance(value, date):
+            return value
+        if not value:
+            return None
+        text = str(value).strip()
+        for fmt, size in (("%Y-%m-%d %H:%M:%S", 19), ("%Y-%m-%d", 10), ("%d.%m.%Y", 10)):
+            try:
+                return datetime.strptime(text[:size], fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    def safe_sheet_name(name, used_names):
+        invalid = set('[]:*?/\\')
+        clean = "".join("_" if char in invalid else char for char in str(name or "Сайт")).strip()
+        clean = clean.replace("https://", "").replace("http://", "").replace("/", "")
+        clean = clean[:31] or "Сайт"
+        candidate = clean
+        counter = 2
+        while candidate in used_names:
+            suffix = f"_{counter}"
+            candidate = f"{clean[:31 - len(suffix)]}{suffix}"
+            counter += 1
+        used_names.add(candidate)
+        return candidate
+
+    def tool_text_and_url(check, site):
+        links = _tool_links(check, site)
+        if not links:
+            return "Без ссылки", None
+        return "\n".join(label for label, _ in links), links[0][1]
+
+    def make_cell_text(check, record, column_date):
+        if not record:
+            return ""
+
+        comment = record.get("comment") or ""
+        if check.get("speed"):
+            mobile = record.get("mobile_score")
+            desktop = record.get("desktop_score")
+            return (
+                f"Mobile: {mobile if mobile is not None else ''}\n"
+                f"Desktop: {desktop if desktop is not None else ''}\n"
+                f"Комментарий: {comment}"
+            )
+
+        status = record.get("status") or "acceptable"
+        return (
+            f"Статус: {status_labels.get(status, status)}\n"
+            f"Комментарий: {comment}\n"
+            f"Дата: {column_date.strftime('%d.%m.%Y')}"
+        )
+
+    def history_record_map(site_id):
+        records = {}
+        for row in history_rows:
+            _, _, row_site_id, check_key, _, new_status, _, new_comment, changed_at, changed_by = row
+            if row_site_id != site_id:
+                continue
+            changed_date = parse_date(changed_at)
+            if not changed_date:
+                continue
+            records[(check_key, changed_date)] = {
+                "status": new_status or "acceptable",
+                "comment": new_comment or "",
+                "checked_by": changed_by or "",
+                "changed_at": changed_at or "",
+            }
+        return records
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    dark = "0F172A"
+    blue = "2563EB"
+    border = Side(style="thin", color="CBD5E1")
+    header_fill = PatternFill("solid", fgColor=dark)
+    section_fill = PatternFill("solid", fgColor="E0F2FE")
+    muted_fill = PatternFill("solid", fgColor="F8FAFC")
+    used_sheet_names = set()
+    project_summaries = []
+    titles = _check_title_map()
+
+    for site in sites:
+        site_id = site[0]
+        site_name = _site_name(site)
+        ws = wb.create_sheet(safe_sheet_name(site_name, used_sheet_names))
+        ws.sheet_view.showGridLines = False
+        ws.freeze_panes = "C8"
+
+        site_history = history_record_map(site_id)
+        site_dates = set()
+        for check in _all_checks():
+            saved = checks_data.get((site_id, check["key"]))
+            checked_date = parse_date(saved.get("checked_at") if saved else None)
+            if checked_date:
+                site_dates.add(checked_date)
+        site_dates.update(date_value for _, date_value in site_history.keys())
+        if not site_dates:
+            site_dates.add(date.today())
+        site_dates = sorted(site_dates)
+
+        max_col = 2 + len(site_dates)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
+        ws["A1"] = "SEO-аудит 1 раз в месяц"
+        ws["A1"].font = Font(color="FFFFFF", bold=True, size=18)
+        ws["A1"].fill = PatternFill("solid", fgColor=blue)
+        ws["A1"].alignment = Alignment(horizontal="center")
+
+        ws["A2"] = "Проект"
+        ws["B2"] = site_name
+        ws["A3"] = "Дата формирования файла"
+        ws["B3"] = datetime.now().strftime("%d.%m.%Y %H:%M")
+        ws["A4"] = "Легенда"
+        ws["B4"] = "🟢 Всё хорошо    🟠 Требует правок    🟡 Пока терпит"
+
+        for row_index in range(2, 5):
+            ws.cell(row_index, 1).font = Font(bold=True, color=dark)
+            ws.cell(row_index, 1).fill = muted_fill
+            ws.cell(row_index, 2).alignment = Alignment(vertical="center", wrap_text=True)
+
+        header_row = 7
+        ws.cell(header_row, 1, "Проверка")
+        ws.cell(header_row, 2, "Инструмент")
+        for index, check_date in enumerate(site_dates, start=3):
+            ws.cell(header_row, index, check_date.strftime("%d.%m.%y"))
+
+        for cell in ws[header_row]:
+            cell.fill = header_fill
+            cell.font = Font(color="FFFFFF", bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = Border(left=border, right=border, top=border, bottom=border)
+
+        row_num = header_row + 1
+        for section, checks in CHECK_SECTIONS:
+            ws.cell(row_num, 1, section)
+            ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=max_col)
+            section_cell = ws.cell(row_num, 1)
+            section_cell.fill = section_fill
+            section_cell.font = Font(color=dark, bold=True)
+            section_cell.alignment = Alignment(vertical="center")
+            row_num += 1
+
+            for check in checks:
+                ws.cell(row_num, 1, check["title"])
+                tool_text, tool_url = tool_text_and_url(check, site)
+                tool_cell = ws.cell(row_num, 2, tool_text)
+                if tool_url:
+                    tool_cell.hyperlink = tool_url
+                    tool_cell.style = "Hyperlink"
+
+                for date_index, check_date in enumerate(site_dates, start=3):
+                    saved = checks_data.get((site_id, check["key"]))
+                    record = None
+                    if saved and parse_date(saved.get("checked_at")) == check_date:
+                        record = dict(saved)
+                    if (check["key"], check_date) in site_history:
+                        record = {**(record or {}), **site_history[(check["key"], check_date)]}
+
+                    cell = ws.cell(row_num, date_index, make_cell_text(check, record, check_date))
+                    status = (record or {}).get("status")
+                    if status in status_fills:
+                        cell.fill = PatternFill("solid", fgColor=status_fills[status])
+                        cell.font = Font(color=status_font_colors[status])
+                    elif cell.value:
+                        cell.fill = muted_fill
+
+                row_num += 1
+
+        for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=max_col):
+            for cell in row:
+                cell.border = Border(left=border, right=border, top=border, bottom=border)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+        for row_index in range(8, ws.max_row + 1):
+            ws.row_dimensions[row_index].height = 72
+        ws.row_dimensions[1].height = 30
+        ws.row_dimensions[7].height = 30
+        ws.column_dimensions["A"].width = 42
+        ws.column_dimensions["B"].width = 24
+        for col in range(3, max_col + 1):
+            ws.column_dimensions[get_column_letter(col)].width = 28
+        ws.auto_filter.ref = f"A{header_row}:{get_column_letter(max_col)}{ws.max_row}"
+
+        latest_date = max(site_dates) if site_dates else None
+        site_checks = [checks_data.get((site_id, check["key"])) for check in _all_checks()]
+        site_checks = [item for item in site_checks if item]
+        project_summaries.append(
+            [
+                site_name,
+                latest_date.strftime("%d.%m.%Y") if latest_date else "",
+                len(site_checks),
+                sum(1 for item in site_checks if item.get("status") == "needs_fix"),
+                sum(1 for item in site_checks if item.get("status") == "acceptable"),
+            ]
+        )
+
+    summary = wb.create_sheet("Сводка", 0)
+    summary.sheet_view.showGridLines = False
+    summary["A1"] = "TechSEO Monitor"
+    summary["A1"].font = Font(color="FFFFFF", bold=True, size=18)
+    summary["A1"].fill = PatternFill("solid", fgColor=blue)
+    summary["A2"] = "Сводка по проектам"
+    summary["A2"].font = Font(color=dark, bold=True, size=14)
+    summary.append(["Проект", "Последняя дата проверки", "Количество проверок", "Количество проблем", "Количество предупреждений"])
+    for item in project_summaries:
+        summary.append(item)
+
+    for cell in summary[3]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+    for row in summary.iter_rows(min_row=1, max_row=summary.max_row, min_col=1, max_col=5):
+        for cell in row:
+            cell.border = Border(left=border, right=border, top=border, bottom=border)
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for col, width in enumerate([32, 22, 22, 20, 24], start=1):
+        summary.column_dimensions[get_column_letter(col)].width = width
+    summary.freeze_panes = "A4"
+
+    history = wb.create_sheet("История")
+    history.sheet_view.showGridLines = False
+    history.append(["Дата изменения", "Проект", "Проверка", "Старый статус", "Новый статус", "Старый комментарий", "Новый комментарий", "Кто изменил"])
+    for cell in history[1]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    sites_by_id = {site[0]: site for site in sites}
+    for row in history_rows:
+        _, _, site_id, check_key, old_status, new_status, old_comment, new_comment, changed_at, changed_by = row
+        site = sites_by_id.get(site_id)
+        history.append(
+            [
+                changed_at or "",
+                _site_name(site) if site else f"Сайт #{site_id}",
+                titles.get(check_key, check_key),
+                status_labels.get(old_status, old_status or ""),
+                status_labels.get(new_status, new_status or ""),
+                old_comment or "",
+                new_comment or "",
+                changed_by or "",
+            ]
+        )
+
+    for row in history.iter_rows(min_row=1, max_row=history.max_row, min_col=1, max_col=8):
+        for cell in row:
+            cell.border = Border(left=border, right=border, top=border, bottom=border)
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for idx, width in enumerate([22, 28, 42, 20, 20, 42, 42, 22], start=1):
+        history.column_dimensions[get_column_letter(idx)].width = width
+    history.freeze_panes = "A2"
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
 def show_quarterly_audit_page():
     user_id = require_user_id()
     user = get_current_user() or {}
@@ -948,6 +1260,35 @@ def show_quarterly_audit_page():
     metric_cols[1].metric("Проверок", len(_all_checks()))
     metric_cols[2].metric("Заполнено ячеек", f"{filled_cells}/{total_cells}")
     metric_cols[3].metric("Нужно исправить", totals["needs_fix"])
+
+    date_cols = st.columns([1, 1.3, 1])
+    with date_cols[0]:
+        bulk_date = st.date_input(
+            "Дата проверки",
+            value=st.session_state.get("quarterly_bulk_checked_at", date.today()),
+            key="quarterly_bulk_checked_at",
+            format="DD.MM.YYYY",
+        )
+    with date_cols[1]:
+        bulk_site_id = st.selectbox(
+            "Сайт",
+            options=[site[0] for site in sites],
+            format_func=lambda site_id: _site_name(sites_by_id[site_id]),
+            key="quarterly_bulk_site_id",
+        )
+    with date_cols[2]:
+        st.write("")
+        st.write("")
+        if st.button("Применить дату ко всем проверкам", use_container_width=True):
+            _apply_date_to_site(
+                user_id=user_id,
+                site=sites_by_id[bulk_site_id],
+                selected_date=bulk_date,
+                saved_checks=saved_checks,
+                user_name=user_name,
+            )
+            st.success("Дата проверки сохранена для всех проверок выбранного сайта.")
+            st.rerun()
 
     selected_sites = st.multiselect(
         "Колонки таблицы",
