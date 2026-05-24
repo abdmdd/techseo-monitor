@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from html import escape
+from io import BytesIO
 from urllib.parse import quote_plus
 
 import streamlit as st
@@ -24,171 +25,188 @@ STATUS_CSS = {
     "needs_fix": "qa-status-fix",
     "acceptable": "qa-status-acceptable",
 }
+STATUS_COLORS = {
+    "all_good": "C6EFCE",
+    "needs_fix": "FCE4D6",
+    "acceptable": "FFF2CC",
+}
 
-CHECK_CATEGORIES = [
-    (
-        "Техническое SEO",
-        [
-            {
-                "key": "responsive",
-                "title": "Проверка адаптивности",
-                "help": "Проверьте, удобно ли пользоваться ключевыми страницами на мобильных устройствах.",
-                "tool": "Открыть PageSpeed",
-                "tool_url": "https://pagespeed.web.dev/report?url={site_url}",
-            },
-            {
-                "key": "site_speed",
-                "title": "Скорость сайта",
-                "help": "Зафиксируйте показатели PageSpeed и Core Web Vitals вручную.",
-                "tool": "Открыть PageSpeed",
-                "tool_url": "https://pagespeed.web.dev/report?url={site_url}",
-                "speed": True,
-            },
-            {
-                "key": "malware",
-                "title": "Проверка вирусов",
-                "help": "Проверьте сайт на вредоносный код, подозрительные скрипты и блокировки.",
-                "tool": "Открыть Dr.Web",
-                "tool_url": "https://vms.drweb.ru/online/?url={site_url}",
-            },
-            {
-                "key": "cyclic_links",
-                "title": "Циклические ссылки",
-                "help": "Отметьте страницы, где ссылки ведут сами на себя и создают лишний шум.",
-                "tool": "Screaming Frog",
-                "tool_url": "https://www.screamingfrog.co.uk/seo-spider/",
-            },
-            {
-                "key": "extra_redirects",
-                "title": "Лишние редиректы",
-                "help": "Проверьте цепочки редиректов и оставьте только необходимые переходы.",
-                "tool": "Screaming Frog",
-                "tool_url": "https://www.screamingfrog.co.uk/seo-spider/",
-            },
-            {
-                "key": "site_copies_index",
-                "title": "Копии сайта в индексе",
-                "help": "Проверьте http/https, www/non-www, зеркала и тестовые домены.",
-                "tool": "Яндекс поиск",
-                "tool_url": "https://yandex.ru/search/?text=site%3A{site_host}",
-            },
-            {
-                "key": "robots_txt",
-                "title": "Robots.txt",
-                "help": "Убедитесь, что важные разделы не закрыты от индексации.",
-                "tool": "Открыть robots.txt",
-                "tool_url": "{site_root}/robots.txt",
-            },
-            {
-                "key": "sitemap_xml",
-                "title": "Sitemap.xml",
-                "help": "Проверьте актуальность URL, статусы страниц и наличие sitemap в robots.txt.",
-                "tool": "Открыть sitemap.xml",
-                "tool_url": "{site_root}/sitemap.xml",
-            },
-            {
-                "key": "canonical",
-                "title": "Canonical",
-                "help": "Проверьте корректность canonical на типовых шаблонах и дублях.",
-                "tool": "Screaming Frog",
-                "tool_url": "https://www.screamingfrog.co.uk/seo-spider/",
-            },
-            {
-                "key": "pagination",
-                "title": "Пагинация",
-                "help": "Проверьте индексируемость, canonical и внутреннюю перелинковку страниц пагинации.",
-                "tool": "Яндекс Вебмастер",
-                "tool_url": "https://webmaster.yandex.ru/",
-            },
-            {
-                "key": "page_indexation",
-                "title": "Индексация страниц",
-                "help": "Сверьте важные URL с фактическим присутствием в поиске.",
-                "tool": "Яндекс Вебмастер",
-                "tool_url": "https://webmaster.yandex.ru/",
-            },
+MAIN_CHECKS = [
+    {
+        "key": "responsive",
+        "title": "Проверка адаптивности",
+        "help": "Проверьте, удобно ли пользоваться основными страницами на мобильных устройствах.",
+    },
+    {
+        "key": "site_speed",
+        "title": "Скорость загрузки сайта",
+        "help": "Зафиксируйте вручную Mobile score и Desktop score из PageSpeed.",
+        "tools": [("PageSpeed", "https://pagespeed.web.dev/")],
+        "speed": True,
+    },
+    {
+        "key": "malware",
+        "title": "Проверка вирусов",
+        "help": "Проверьте сайт на вредоносный код, подозрительные скрипты и блокировки.",
+        "tools": [("Dr.Web", "https://vms.drweb.ru/online")],
+    },
+    {
+        "key": "cyclic_links",
+        "title": "Циклические ссылки",
+        "help": "Найдите страницы, где ссылки ведут сами на себя.",
+        "tools": [("Screaming Frog", "https://www.screamingfrog.co.uk/seo-spider/")],
+    },
+    {
+        "key": "extra_redirects",
+        "title": "Лишние редиректы",
+        "help": "Проверьте цепочки редиректов и оставьте только необходимые переходы.",
+        "tools": [("Screaming Frog", "https://www.screamingfrog.co.uk/seo-spider/")],
+    },
+    {
+        "key": "site_copies_index",
+        "title": "Копии сайта в индексе",
+        "help": "Проверьте дубли сайта, зеркала и копии контента в индексе.",
+        "tools": [("Copyscape", "https://www.copyscape.com/")],
+    },
+    {
+        "key": "commercial_factors",
+        "title": "Проверка коммерческих факторов",
+        "help": "Проверьте контакты, оплату, доставку, гарантии, отзывы и доверие.",
+        "tools": [
+            (
+                "Открыть инструкцию",
+                "https://sedate-frog-4ea.notion.site/57fee93802cb4098bed3e466b7bd6ae8?v=acc7b9598b924a32a8ccda536435d29e",
+            )
         ],
-    ),
-    (
-        "Коммерческие факторы",
-        [
-            {
-                "key": "commercial_factors",
-                "title": "Коммерческие факторы",
-                "help": "Проверьте контакты, реквизиты, оплату, доставку, гарантии, отзывы и доверие.",
-                "tool": "Открыть сайт",
-                "tool_url": "{site_root}",
-            },
-            {
-                "key": "regionality",
-                "title": "Региональность",
-                "help": "Проверьте регион в Яндекс Вебмастере, контакты и локальные сигналы.",
-                "tool": "Яндекс Вебмастер",
-                "tool_url": "https://webmaster.yandex.ru/",
-            },
-            {
-                "key": "filters",
-                "title": "Проверка фильтров",
-                "help": "Проверьте полезные посадочные фильтры, индексацию и закрытие мусорных комбинаций.",
-                "tool": "Открыть сайт",
-                "tool_url": "{site_root}",
-            },
-            {
-                "key": "external_links",
-                "title": "Внешние ссылки",
-                "help": "Оцените профиль ссылок, анкоры, доноров и рискованные размещения.",
-                "tool": "Яндекс Вебмастер",
-                "tool_url": "https://webmaster.yandex.ru/",
-            },
-            {
-                "key": "paid_links_indexation",
-                "title": "Индексация закупленных ссылок",
-                "help": "Проверьте, проиндексированы ли страницы-доноры и живы ли размещения.",
-                "tool": "Яндекс поиск",
-                "tool_url": "https://yandex.ru/search/?text={site_host}",
-            },
-            {
-                "key": "outgoing_links",
-                "title": "Исходящие ссылки",
-                "help": "Проверьте внешние ссылки сайта, nofollow/sponsored и лишние сквозные ссылки.",
-                "tool": "Screaming Frog",
-                "tool_url": "https://www.screamingfrog.co.uk/seo-spider/",
-            },
+    },
+    {
+        "key": "regionality",
+        "title": "Проверка региональности в Вебмастере",
+        "help": "Проверьте региональность сайта и локальные сигналы.",
+        "tools": [("Яндекс Вебмастер", "https://webmaster.yandex.ru/")],
+    },
+    {
+        "key": "filters",
+        "title": "Проверка фильтров",
+        "help": "Зафиксируйте выводы по фильтрам в комментарии.",
+    },
+    {
+        "key": "image_alt",
+        "title": "Alt картинок",
+        "help": "Проверьте alt у важных изображений, карточек товаров и иллюстраций.",
+    },
+    {
+        "key": "paid_links_indexation",
+        "title": "Индексация закупленных ссылок",
+        "help": "Проверьте индексацию страниц-доноров и статус размещений.",
+    },
+    {
+        "key": "outgoing_links",
+        "title": "Исходящие ссылки",
+        "help": "Проверьте внешние ссылки, nofollow/sponsored и лишние сквозные ссылки.",
+        "tools": [("Screaming Frog", "https://www.screamingfrog.co.uk/seo-spider/")],
+    },
+]
+
+MONTHLY_CHECKS = [
+    {
+        "key": "webmaster_gsc_errors",
+        "title": "Наличие ошибок в Яндекс Вебмастере и Google Search Console",
+        "help": "Сверьте ошибки сканирования, индексации и покрытия в двух панелях.",
+        "tools": [
+            ("Яндекс Вебмастер", "https://webmaster.yandex.ru/"),
+            ("Google Search Console", "https://search.google.com/search-console/"),
         ],
-    ),
-    (
-        "Контент",
-        [
-            {
-                "key": "image_alt",
-                "title": "Alt картинок",
-                "help": "Проверьте alt у важных изображений, карточек товаров и иллюстраций в статьях.",
-                "tool": "Screaming Frog",
-                "tool_url": "https://www.screamingfrog.co.uk/seo-spider/",
-            },
-            {
-                "key": "meta_tags",
-                "title": "Meta tags",
-                "help": "Проверьте Title, Description, дубли, длину и соответствие интенту страниц.",
-                "tool": "Screaming Frog",
-                "tool_url": "https://www.screamingfrog.co.uk/seo-spider/",
-            },
-            {
-                "key": "h1",
-                "title": "H1",
-                "help": "Проверьте один понятный H1 на странице и отсутствие дублей шаблона.",
-                "tool": "Screaming Frog",
-                "tool_url": "https://www.screamingfrog.co.uk/seo-spider/",
-            },
-            {
-                "key": "duplicate_pages",
-                "title": "Дубли страниц",
-                "help": "Проверьте технические, контентные и параметрические дубли.",
-                "tool": "Открыть Copyscape",
-                "tool_url": "https://www.copyscape.com/?q={site_url}",
-            },
+    },
+    {"key": "iks", "title": "ИКС", "help": "Зафиксируйте ИКС и важные изменения в комментарии."},
+    {"key": "page_indexation", "title": "Индексация страниц", "help": "Проверьте важные страницы в поиске."},
+    {
+        "key": "removed_pages_search",
+        "title": "Удаленные страницы из поиска",
+        "help": "Проверьте, какие страницы выпали из поиска и почему.",
+    },
+    {
+        "key": "webmaster_summary",
+        "title": "Сводка Вебмастера по сайту",
+        "help": "Проверьте общую сводку сайта в Яндекс Вебмастере.",
+        "tools": [("Яндекс Вебмастер", "https://webmaster.yandex.ru/")],
+    },
+    {
+        "key": "sitemap_errors",
+        "title": "Ошибки sitemap",
+        "help": "Проверьте sitemap сайта и инструмент проверки sitemap в Вебмастере.",
+        "tools": [
+            ("Sitemap сайта", "{site_root}/sitemap.xml"),
+            ("Проверка sitemap", "https://webmaster.yandex.ru/site/tools/sitemap/"),
         ],
-    ),
+    },
+    {
+        "key": "robots_txt",
+        "title": "Robots",
+        "help": "Проверьте robots.txt сайта и инструмент анализа robots в Вебмастере.",
+        "tools": [
+            ("Robots сайта", "{site_root}/robots.txt"),
+            ("Проверка robots", "https://webmaster.yandex.ru/site/tools/robotstxt/"),
+        ],
+    },
+    {
+        "key": "duplicate_meta_pages",
+        "title": "Дубли страниц и одинаковые мета-теги",
+        "help": "Проверьте страницы с одинаковыми title/description и контентными дублями.",
+    },
+    {"key": "canonical", "title": "Canonical", "help": "Проверьте корректность canonical на типовых шаблонах."},
+    {
+        "key": "pagination",
+        "title": "Пагинация",
+        "help": "Проверка URL, title и meta-тегов на страницах пагинации. Нужно ли настроить rel canonical.",
+    },
+    {
+        "key": "broken_links_404",
+        "title": "Проверка битых ссылок 404",
+        "help": "Зафиксируйте найденные 404 и план исправления.",
+    },
+    {
+        "key": "important_meta_tags",
+        "title": "Правильные мета-теги на важных страницах",
+        "help": "Проверьте title и description на приоритетных посадочных страницах.",
+    },
+    {
+        "key": "metrika_goals",
+        "title": "Проверка целей в Метрике",
+        "help": "Проверьте, что важные цели настроены и срабатывают.",
+    },
+    {
+        "key": "homepage_duplicate_redirects",
+        "title": "Главная страница должна редиректить",
+        "help": "Проверьте index.php, /// и другие дубли главной страницы.",
+        "tools": [("Проверка дублей", "https://be1.ru/dubli-stranic/")],
+    },
+    {
+        "key": "mobile_core_pages",
+        "title": "Проверка основных страниц, фильтра и корзины в мобильных устройствах",
+        "help": "Проверьте сценарии на мобильных устройствах и зафиксируйте замечания.",
+    },
+    {
+        "key": "reviews_links",
+        "title": "Проверка отзывов",
+        "help": "Используются ссылки на карты, сохраненные в разделе «Мои сайты».",
+        "reviews": True,
+    },
+    {
+        "key": "yandex_business_replies",
+        "title": "Есть ли ответы компании на отзывы в Яндекс Бизнесе",
+        "help": "Проверьте свежие отзывы и ответы компании.",
+    },
+    {
+        "key": "yandex_business_photos",
+        "title": "Разместить 2-3 фото в Яндекс Бизнесе",
+        "help": "Зафиксируйте, какие фото добавлены или запланированы.",
+    },
+]
+
+CHECK_SECTIONS = [
+    ("Основной блок", MAIN_CHECKS),
+    ("Ежемесячный аудит", MONTHLY_CHECKS),
 ]
 
 
@@ -209,18 +227,28 @@ def _site_root(site):
     return f"https://{raw_url}".rstrip("/")
 
 
-def _site_host(site):
-    return _site_root(site).replace("https://", "").replace("http://", "").split("/")[0]
-
-
-def _tool_url(check, site):
+def _format_tool_url(url, site):
     root = _site_root(site)
-    url = check.get("tool_url", "#")
     return url.format(
         site_url=quote_plus(root),
         site_root=root,
-        site_host=quote_plus(_site_host(site)),
+        site_host=quote_plus(root.replace("https://", "").replace("http://", "").split("/")[0]),
     )
+
+
+def _site_review_links(site):
+    candidates = [
+        ("Яндекс Карты", site[5] if len(site) > 5 else ""),
+        ("Google Maps", site[6] if len(site) > 6 else ""),
+        ("2ГИС", site[7] if len(site) > 7 else ""),
+    ]
+    return [(label, url.strip()) for label, url in candidates if url and str(url).strip()]
+
+
+def _tool_links(check, site):
+    if check.get("reviews"):
+        return _site_review_links(site)
+    return [(label, _format_tool_url(url, site)) for label, url in check.get("tools", [])]
 
 
 def _state_key(site_id, check_key, field):
@@ -263,46 +291,27 @@ def _safe_int(value):
         return None
 
 
-def _safe_float(value):
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _save_cell(user_id, site_id, check_key, user_name, has_speed=False):
-    status = st.session_state.get(_state_key(site_id, check_key, "status"), "acceptable")
-    comment = st.session_state.get(_state_key(site_id, check_key, "comment"), "")
-    checked_at = _date_to_db(st.session_state.get(_state_key(site_id, check_key, "checked_at")))
-
     mobile_score = None
     desktop_score = None
-    lcp = None
-    inp = None
-    cls = None
 
     if has_speed:
         mobile_score = _safe_int(st.session_state.get(_state_key(site_id, check_key, "mobile_score")))
         desktop_score = _safe_int(st.session_state.get(_state_key(site_id, check_key, "desktop_score")))
-        lcp = _safe_float(st.session_state.get(_state_key(site_id, check_key, "lcp")))
-        inp = _safe_float(st.session_state.get(_state_key(site_id, check_key, "inp")))
-        cls = _safe_float(st.session_state.get(_state_key(site_id, check_key, "cls")))
 
     upsert_quarterly_audit_check(
         user_id=user_id,
         site_id=site_id,
         check_key=check_key,
-        status=status,
-        comment=comment,
-        checked_at=checked_at,
+        status=st.session_state.get(_state_key(site_id, check_key, "status"), "acceptable"),
+        comment=st.session_state.get(_state_key(site_id, check_key, "comment"), ""),
+        checked_at=_date_to_db(st.session_state.get(_state_key(site_id, check_key, "checked_at"))),
         checked_by=user_name,
         mobile_score=mobile_score,
         desktop_score=desktop_score,
-        lcp=lcp,
-        inp=inp,
-        cls=cls,
+        lcp=None,
+        inp=None,
+        cls=None,
     )
     st.session_state["quarterly_audit_saved_at"] = datetime.now().strftime("%H:%M:%S")
 
@@ -315,9 +324,6 @@ def _ensure_cell_state(site_id, check, saved):
         "checked_at": _parse_date(saved.get("checked_at") if saved else None),
         "mobile_score": saved.get("mobile_score") if saved else None,
         "desktop_score": saved.get("desktop_score") if saved else None,
-        "lcp": saved.get("lcp") if saved else None,
-        "inp": saved.get("inp") if saved else None,
-        "cls": saved.get("cls") if saved else None,
     }
 
     for field, value in defaults.items():
@@ -328,11 +334,24 @@ def _ensure_cell_state(site_id, check, saved):
 
 def _status_badge(status):
     normalized = status if status in STATUS_OPTIONS else "acceptable"
-    return (
-        f'<span class="qa-status {STATUS_CSS[normalized]}">'
-        f'{escape(STATUS_LABELS[normalized])}'
-        f'</span>'
-    )
+    return f'<span class="qa-status {STATUS_CSS[normalized]}">{escape(STATUS_LABELS[normalized])}</span>'
+
+
+def _all_checks():
+    return [check for _, checks in CHECK_SECTIONS for check in checks]
+
+
+def _check_title_map():
+    return {check["key"]: check["title"] for check in _all_checks()}
+
+
+def _status_totals(checks):
+    totals = {"all_good": 0, "needs_fix": 0, "acceptable": 0}
+    for check in checks.values():
+        status = check.get("status") or "acceptable"
+        if status in totals:
+            totals[status] += 1
+    return totals
 
 
 def _render_css():
@@ -381,32 +400,8 @@ def _render_css():
                 line-height: 1.45;
                 margin: -2px 0 14px 0;
             }
+            .qa-workspace-header,
             .qa-category {
-                position: sticky;
-                top: 0;
-                z-index: 4;
-                display: flex;
-                justify-content: space-between;
-                gap: 12px;
-                align-items: center;
-                margin: 20px 0 8px 0;
-                padding: 12px 14px;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
-                background: rgba(248, 250, 252, 0.97);
-                backdrop-filter: blur(8px);
-            }
-            .qa-category-title {
-                color: #0f172a;
-                font-size: 18px;
-                font-weight: 850;
-            }
-            .qa-category-note {
-                color: #64748b;
-                font-size: 12px;
-                font-weight: 750;
-            }
-            .qa-workspace-header {
                 position: sticky;
                 top: 0;
                 z-index: 5;
@@ -418,6 +413,20 @@ def _render_css():
                 backdrop-filter: blur(8px);
                 box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
             }
+            .qa-category {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                background: rgba(248, 250, 252, 0.98);
+                border-color: #e2e8f0;
+                margin-top: 18px;
+            }
+            .qa-category-title {
+                color: #0f172a;
+                font-size: 18px;
+                font-weight: 850;
+            }
+            .qa-category-note,
             .qa-workspace-head-cell {
                 color: #1e3a8a;
                 font-size: 12px;
@@ -534,9 +543,6 @@ def _render_css():
                 color: #64748b;
                 background: #ffffff;
             }
-            div[data-testid="stHorizontalBlock"] {
-                align-items: stretch;
-            }
             @media (max-width: 760px) {
                 .qa-hero {
                     flex-direction: column;
@@ -545,8 +551,11 @@ def _render_css():
                 .qa-title {
                     font-size: 24px;
                 }
+                .qa-workspace-header,
                 .qa-category {
                     position: static;
+                }
+                .qa-category {
                     flex-direction: column;
                     align-items: flex-start;
                 }
@@ -581,6 +590,7 @@ def _render_cell(user_id, site, check, saved, user_name):
     status = st.session_state.get(_state_key(site_id, check_key, "status"), "acceptable")
     checked_by = (saved or {}).get("checked_by") or user_name
     updated_at = (saved or {}).get("updated_at")
+    callback_args = (user_id, site_id, check_key, user_name, has_speed)
 
     st.markdown(
         f"""
@@ -592,9 +602,6 @@ def _render_cell(user_id, site, check, saved, user_name):
         """,
         unsafe_allow_html=True,
     )
-
-    callback_args = (user_id, site_id, check_key, user_name, has_speed)
-
     st.selectbox(
         "Статус",
         STATUS_OPTIONS,
@@ -634,22 +641,6 @@ def _render_cell(user_id, site, check, saved, user_name):
                 on_change=_save_cell,
                 args=callback_args,
             )
-            st.number_input(
-                "LCP",
-                min_value=0.0,
-                step=0.1,
-                key=_state_key(site_id, check_key, "lcp"),
-                on_change=_save_cell,
-                args=callback_args,
-            )
-            st.number_input(
-                "CLS",
-                min_value=0.0,
-                step=0.01,
-                key=_state_key(site_id, check_key, "cls"),
-                on_change=_save_cell,
-                args=callback_args,
-            )
         with speed_cols[1]:
             st.number_input(
                 "Desktop score",
@@ -660,42 +651,71 @@ def _render_cell(user_id, site, check, saved, user_name):
                 on_change=_save_cell,
                 args=callback_args,
             )
-            st.number_input(
-                "INP",
-                min_value=0.0,
-                step=10.0,
-                key=_state_key(site_id, check_key, "inp"),
-                on_change=_save_cell,
-                args=callback_args,
-            )
 
     if updated_at:
         st.caption(f"Сохранено: {updated_at}")
 
-    st.link_button(check["tool"], _tool_url(check, site), use_container_width=True)
+    links = _tool_links(check, site)
+    if links:
+        for index, (label, url) in enumerate(links):
+            st.link_button(
+                label,
+                url,
+                key=f"quarterly_tool_{site_id}_{check_key}_{index}",
+                use_container_width=True,
+            )
+    else:
+        st.caption("Без внешней ссылки. Заполните комментарий вручную.")
 
 
-def _status_totals(checks):
-    totals = {"all_good": 0, "needs_fix": 0, "acceptable": 0}
-    for check in checks.values():
-        status = check.get("status") or "acceptable"
-        if status in totals:
-            totals[status] += 1
-    return totals
+def _render_workspace_section(title, checks, visible_sites, sites_by_id, saved_checks, user_id, user_name):
+    st.markdown(
+        f"""
+        <div class="qa-category">
+            <div class="qa-category-title">{escape(title)}</div>
+            <div class="qa-category-note">{len(checks)} проверок · {len(visible_sites)} сайтов</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
+    for check in checks:
+        st.markdown('<div class="qa-row">', unsafe_allow_html=True)
+        columns = st.columns([1.15] + [1 for _ in visible_sites], gap="medium")
 
-def _flatten_checks():
-    return [check for _, checks in CHECK_CATEGORIES for check in checks]
+        with columns[0]:
+            st.markdown(
+                f"""
+                <div class="qa-check-title">{escape(check["title"])}</div>
+                <div class="qa-check-help">{escape(check["help"])}</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.caption("Ячейка сохраняется сразу после изменения поля.")
+
+        for column, site in zip(columns[1:], visible_sites):
+            with column:
+                _render_cell(
+                    user_id=user_id,
+                    site=site,
+                    check=check,
+                    saved=saved_checks.get((site[0], check["key"])),
+                    user_name=user_name,
+                )
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_history(user_id, sites_by_id):
     history = get_quarterly_audit_history(user_id=user_id, limit=60)
     if not history:
-        st.markdown('<div class="qa-empty">История появится после первых сохранений в таблице.</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="qa-empty">История появится после первых сохранений в таблице.</div>',
+            unsafe_allow_html=True,
+        )
         return
 
-    check_titles = {check["key"]: check["title"] for check in _flatten_checks()}
-
+    check_titles = _check_title_map()
     for row in history[:20]:
         _, _, site_id, check_key, old_status, new_status, old_comment, new_comment, changed_at, changed_by = row
         site = sites_by_id.get(site_id)
@@ -718,6 +738,171 @@ def _render_history(user_id, sites_by_id):
             st.caption("Комментарий был обновлен.")
 
 
+def _export_quarterly_excel(sites, checks_data, history_rows):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Проверки"
+    ws.freeze_panes = "A6"
+    ws.sheet_view.showGridLines = False
+
+    dark = "0F172A"
+    blue = "2563EB"
+    border = Side(style="thin", color="CBD5E1")
+    header_fill = PatternFill("solid", fgColor=dark)
+    section_fill = PatternFill("solid", fgColor="E0F2FE")
+    muted_fill = PatternFill("solid", fgColor="F8FAFC")
+
+    ws.merge_cells("A1:H1")
+    ws["A1"] = "TechSEO Monitor"
+    ws["A1"].font = Font(color="FFFFFF", bold=True, size=18)
+    ws["A1"].fill = PatternFill("solid", fgColor=blue)
+    ws["A1"].alignment = Alignment(horizontal="center")
+
+    ws.merge_cells("A2:H2")
+    ws["A2"] = "Quarterly SEO Workspace"
+    ws["A2"].font = Font(color=dark, bold=True, size=14)
+    ws["A2"].alignment = Alignment(horizontal="center")
+
+    ws["A3"] = "Дата экспорта"
+    ws["B3"] = datetime.now().strftime("%d.%m.%Y %H:%M")
+    ws["A4"] = "Сайты"
+    ws["B4"] = ", ".join(_site_name(site) for site in sites)
+
+    headers = [
+        "Раздел",
+        "Проверка",
+        "Сайт",
+        "Статус",
+        "Комментарий",
+        "Дата",
+        "SEO специалист",
+        "Mobile score",
+        "Desktop score",
+    ]
+    ws.append(headers)
+    for cell in ws[5]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    row_num = 6
+    for section, checks in CHECK_SECTIONS:
+        ws.append([section])
+        ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=len(headers))
+        section_cell = ws.cell(row_num, 1)
+        section_cell.fill = section_fill
+        section_cell.font = Font(color=dark, bold=True)
+        row_num += 1
+
+        for check in checks:
+            for site in sites:
+                saved = checks_data.get((site[0], check["key"]), {})
+                status = saved.get("status") or "acceptable"
+                ws.append(
+                    [
+                        section,
+                        check["title"],
+                        _site_name(site),
+                        STATUS_LABELS.get(status, status),
+                        saved.get("comment") or "",
+                        saved.get("checked_at") or "",
+                        saved.get("checked_by") or "",
+                        saved.get("mobile_score") if check.get("speed") else "",
+                        saved.get("desktop_score") if check.get("speed") else "",
+                    ]
+                )
+                status_cell = ws.cell(row_num, 4)
+                status_cell.fill = PatternFill("solid", fgColor=STATUS_COLORS.get(status, "FFFFFF"))
+                row_num += 1
+
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=len(headers)):
+        for cell in row:
+            cell.border = Border(left=border, right=border, top=border, bottom=border)
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+    widths = [22, 38, 24, 18, 48, 14, 22, 14, 14]
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+    ws.auto_filter.ref = f"A5:I{ws.max_row}"
+
+    summary = wb.create_sheet("Сводка")
+    summary.sheet_view.showGridLines = False
+    summary["A1"] = "TechSEO Monitor"
+    summary["A1"].font = Font(color="FFFFFF", bold=True, size=18)
+    summary["A1"].fill = PatternFill("solid", fgColor=blue)
+    summary["A2"] = "Сводка по статусам"
+    summary["A2"].font = Font(color=dark, bold=True, size=14)
+    summary.append(["Сайт", "Все хорошо", "Допустимо", "Нужно исправить", "Всего заполнено"])
+
+    for site in sites:
+        site_checks = [checks_data.get((site[0], check["key"])) for check in _all_checks()]
+        site_checks = [item for item in site_checks if item]
+        summary.append(
+            [
+                _site_name(site),
+                sum(1 for item in site_checks if item.get("status") == "all_good"),
+                sum(1 for item in site_checks if item.get("status") == "acceptable"),
+                sum(1 for item in site_checks if item.get("status") == "needs_fix"),
+                len(site_checks),
+            ]
+        )
+
+    for cell in summary[3]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+    for col in range(1, 6):
+        summary.column_dimensions[get_column_letter(col)].width = [28, 14, 14, 16, 16][col - 1]
+
+    history = wb.create_sheet("История")
+    history.sheet_view.showGridLines = False
+    history.append(["Сайт", "Проверка", "Старый статус", "Новый статус", "Старый комментарий", "Новый комментарий", "Дата", "Кто изменил"])
+    for cell in history[1]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    sites_by_id = {site[0]: site for site in sites}
+    titles = _check_title_map()
+    for row in history_rows:
+        _, _, site_id, check_key, old_status, new_status, old_comment, new_comment, changed_at, changed_by = row
+        site = sites_by_id.get(site_id)
+        history.append(
+            [
+                _site_name(site) if site else f"Сайт #{site_id}",
+                titles.get(check_key, check_key),
+                STATUS_LABELS.get(old_status, old_status or ""),
+                STATUS_LABELS.get(new_status, new_status or ""),
+                old_comment or "",
+                new_comment or "",
+                changed_at or "",
+                changed_by or "",
+            ]
+        )
+
+    for row in history.iter_rows(min_row=1, max_row=history.max_row, min_col=1, max_col=8):
+        for cell in row:
+            cell.border = Border(left=border, right=border, top=border, bottom=border)
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for idx, width in enumerate([24, 38, 18, 18, 42, 42, 20, 22], start=1):
+        history.column_dimensions[get_column_letter(idx)].width = width
+
+    for sheet in [ws, summary, history]:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.row > 1 and cell.fill.fill_type is None:
+                    cell.fill = muted_fill if cell.row % 2 == 0 else PatternFill(fill_type=None)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
 def show_quarterly_audit_page():
     user_id = require_user_id()
     user = get_current_user() or {}
@@ -735,10 +920,10 @@ def show_quarterly_audit_page():
         f"""
         <div class="qa-hero">
             <div>
-                <div class="qa-title">Ежеквартальный SEO Workspace</div>
+                <div class="qa-title">Quarterly SEO Workspace</div>
                 <div class="qa-subtitle">
-                    Рабочая матрица для ручных quarterly SEO проверок. Строки — проверки, колонки — ваши сайты,
-                    ячейки — состояние конкретной проверки: статус, комментарий, дата, специалист и метрики скорости.
+                    Ручное рабочее пространство SEO-специалиста: основные квартальные проверки открыты сразу,
+                    ежемесячный аудит скрыт в отдельном разделе, все изменения сохраняются в SQLite.
                 </div>
             </div>
             <div class="qa-save-pill">{escape(save_label)}</div>
@@ -755,19 +940,14 @@ def show_quarterly_audit_page():
         return
 
     totals = _status_totals(saved_checks)
-    total_cells = len(_flatten_checks()) * len(sites)
+    total_cells = len(_all_checks()) * len(sites)
     filled_cells = len(saved_checks)
 
     metric_cols = st.columns(4)
     metric_cols[0].metric("Сайтов в workspace", len(sites))
-    metric_cols[1].metric("Проверок", len(_flatten_checks()))
+    metric_cols[1].metric("Проверок", len(_all_checks()))
     metric_cols[2].metric("Заполнено ячеек", f"{filled_cells}/{total_cells}")
     metric_cols[3].metric("Нужно исправить", totals["needs_fix"])
-
-    st.markdown(
-        '<div class="qa-helper">Изменения сохраняются автоматически в SQLite. После F5 статусы, комментарии, даты и speed-метрики останутся на месте.</div>',
-        unsafe_allow_html=True,
-    )
 
     selected_sites = st.multiselect(
         "Колонки таблицы",
@@ -781,6 +961,24 @@ def show_quarterly_audit_page():
     if not visible_sites:
         st.info("Выберите хотя бы один сайт, чтобы показать таблицу.")
         return
+
+    export_data = _export_quarterly_excel(
+        visible_sites,
+        saved_checks,
+        get_quarterly_audit_history(user_id=user_id, limit=500),
+    )
+    st.download_button(
+        "Скачать Excel",
+        data=export_data,
+        file_name=f"quarterly_seo_workspace_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+    st.markdown(
+        '<div class="qa-helper">После F5 статусы, комментарии, даты и score-метрики останутся на месте. Excel выгружается по выбранным колонкам сайтов.</div>',
+        unsafe_allow_html=True,
+    )
 
     tabs = st.tabs(["SEO workspace", "История изменений"])
 
@@ -797,42 +995,26 @@ def show_quarterly_audit_page():
                 )
         st.markdown("</div>", unsafe_allow_html=True)
 
-        for category, checks in CHECK_CATEGORIES:
-            st.markdown(
-                f"""
-                <div class="qa-category">
-                    <div class="qa-category-title">{escape(category)}</div>
-                    <div class="qa-category-note">{len(checks)} проверок · {len(visible_sites)} сайтов</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
+        _render_workspace_section(
+            "Основной блок",
+            MAIN_CHECKS,
+            visible_sites,
+            sites_by_id,
+            saved_checks,
+            user_id,
+            user_name,
+        )
+
+        with st.expander("Ежемесячный аудит", expanded=False):
+            _render_workspace_section(
+                "Ежемесячный аудит",
+                MONTHLY_CHECKS,
+                visible_sites,
+                sites_by_id,
+                saved_checks,
+                user_id,
+                user_name,
             )
-
-            for check in checks:
-                st.markdown('<div class="qa-row">', unsafe_allow_html=True)
-                columns = st.columns([1.15] + [1 for _ in visible_sites], gap="medium")
-
-                with columns[0]:
-                    st.markdown(
-                        f"""
-                        <div class="qa-check-title">{escape(check["title"])}</div>
-                        <div class="qa-check-help">{escape(check["help"])}</div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                    st.caption("Подсказка: каждая ячейка сохраняется сразу после изменения поля.")
-
-                for column, site in zip(columns[1:], visible_sites):
-                    with column:
-                        _render_cell(
-                            user_id=user_id,
-                            site=site,
-                            check=check,
-                            saved=saved_checks.get((site[0], check["key"])),
-                            user_name=user_name,
-                        )
-
-                st.markdown("</div>", unsafe_allow_html=True)
 
     with tabs[1]:
         st.markdown(

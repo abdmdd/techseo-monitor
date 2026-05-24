@@ -14,3 +14,4 @@ beautifulsoup4
 lxml
 playwright
 reportlab
+openpyxl
