@@ -5,6 +5,11 @@ import streamlit as st
 
 from components.ui_helpers import metric_card
 from database.db import add_site
+from services.yandex_oauth_service import (
+    disconnect_yandex_integration,
+    generate_yandex_auth_url,
+    get_yandex_integration_status,
+)
 from views.auth_page import require_user_id
 from views.cached_data import cached_get_audit_history, cached_get_sites, clear_cached_data
 
@@ -81,6 +86,37 @@ def site_card(site, audit):
         </div>
         """,
         unsafe_allow_html=True
+    )
+
+
+def yandex_webmaster_oauth_card(user_id, site):
+    site_id = site[0]
+    status = get_yandex_integration_status(user_id, site_id)
+
+    st.markdown("##### Яндекс Вебмастер")
+
+    if status["connected"]:
+        st.success("Подключено")
+        st.caption(f"Дата подключения: {status.get('connected_at') or '—'}")
+
+        if st.button("Отключить Яндекс Вебмастер", key=f"disconnect_yandex_webmaster_{site_id}", use_container_width=True):
+            if disconnect_yandex_integration(user_id, site_id):
+                st.success("Яндекс Вебмастер отключён.")
+                st.rerun()
+            else:
+                st.warning("Не удалось отключить Яндекс Вебмастер.")
+        return
+
+    try:
+        auth_url = generate_yandex_auth_url(user_id, site_id)
+    except ValueError as exc:
+        st.warning(str(exc))
+        return
+
+    st.link_button(
+        "Подключить Яндекс Вебмастер",
+        auth_url,
+        use_container_width=True,
     )
 
 
@@ -270,6 +306,13 @@ def show_sites_page():
     history = cached_get_audit_history(user_id=user_id)
     audits_by_url = latest_audit_by_url(history)
 
+    if st.session_state.pop("yandex_oauth_success", None):
+        st.success("Яндекс Вебмастер подключён")
+
+    oauth_error = st.session_state.pop("yandex_oauth_error", None)
+    if oauth_error:
+        st.error(oauth_error)
+
     sites_count = len(sites)
     latest_audit = history[0] if history else None
     latest_audit_label = latest_audit[11] if latest_audit else "Нет аудитов"
@@ -329,6 +372,7 @@ def show_sites_page():
                     site_card(site, audits_by_url.get(site[2]))
 
                     st.link_button("Открыть сайт", site[2], use_container_width=True)
+                    yandex_webmaster_oauth_card(user_id, site)
 
     section_header(
         "Интеграции",

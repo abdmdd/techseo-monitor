@@ -221,6 +221,22 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS yandex_integrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            site_id INTEGER NOT NULL,
+            service_type TEXT NOT NULL,
+            access_token TEXT,
+            refresh_token TEXT,
+            expires_at TEXT,
+            connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'connected',
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+        )
+    """)
+
     migrate_sites_unique_url(cursor)
 
     if not column_exists(cursor, "sites", "user_id"):
@@ -271,6 +287,14 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_quarterly_history_check
         ON quarterly_audit_history(check_id)
+    """)
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_yandex_integrations_unique
+        ON yandex_integrations(user_id, site_id, service_type)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_yandex_integrations_user_site
+        ON yandex_integrations(user_id, site_id)
     """)
 
     conn.commit()

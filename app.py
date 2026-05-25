@@ -15,6 +15,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from components.ui_helpers import apply_global_styles
 from database.db import init_db
+from services.yandex_oauth_service import (
+    exchange_code_for_token,
+    parse_yandex_oauth_state,
+    save_yandex_integration,
+)
 
 # ==================================================
 # VIEWS
@@ -58,6 +63,50 @@ bootstrap_app()
 apply_global_styles()
 init_auth_state()
 
+
+def handle_yandex_oauth_callback():
+    code = st.query_params.get("code")
+    state = st.query_params.get("state")
+
+    if not code and not state:
+        return
+
+    st.session_state["main_menu"] = "Мои сайты"
+    payload = parse_yandex_oauth_state(state)
+
+    if not code or not payload:
+        st.session_state["yandex_oauth_error"] = "Не удалось проверить OAuth state Яндекса."
+        st.query_params.clear()
+        st.rerun()
+
+    current_user = get_current_user()
+    if current_user and current_user["id"] != payload["user_id"]:
+        st.session_state["yandex_oauth_error"] = "OAuth callback не совпадает с текущим пользователем."
+        st.query_params.clear()
+        st.rerun()
+
+    try:
+        tokens = exchange_code_for_token(code)
+        saved = save_yandex_integration(
+            user_id=payload["user_id"],
+            site_id=payload["site_id"],
+            tokens=tokens,
+        )
+    except Exception as exc:
+        saved = False
+        st.session_state["yandex_oauth_error"] = f"Не удалось подключить Яндекс Вебмастер ({exc.__class__.__name__})."
+
+    if saved:
+        st.session_state["yandex_oauth_success"] = "Яндекс Вебмастер подключён"
+    elif "yandex_oauth_error" not in st.session_state:
+        st.session_state["yandex_oauth_error"] = "Не удалось сохранить подключение Яндекс Вебмастера."
+
+    st.query_params.clear()
+    st.rerun()
+
+
+handle_yandex_oauth_callback()
+
 if not get_current_user():
     show_auth_page()
     st.stop()
@@ -99,7 +148,8 @@ menu = st.sidebar.radio(
         "История проверок",
         "Настройки"
     ],
-    label_visibility="collapsed"
+    label_visibility="collapsed",
+    key="main_menu"
 )
 
 st.sidebar.divider()

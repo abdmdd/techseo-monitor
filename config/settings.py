@@ -47,6 +47,21 @@ YANDEX_WEBMASTER_TOKEN = os.getenv(
     ""
 )
 
+YANDEX_CLIENT_ID = os.getenv(
+    "YANDEX_CLIENT_ID",
+    ""
+)
+
+YANDEX_CLIENT_SECRET = os.getenv(
+    "YANDEX_CLIENT_SECRET",
+    ""
+)
+
+YANDEX_REDIRECT_URI = os.getenv(
+    "YANDEX_REDIRECT_URI",
+    "https://techseo-monitor.ru/yandex/oauth/callback"
+)
+
 YANDEX_GPT_API_KEY = os.getenv(
     "YANDEX_GPT_API_KEY",
     ""
