@@ -57,10 +57,11 @@ YANDEX_CLIENT_SECRET = os.getenv(
     ""
 )
 
-YANDEX_REDIRECT_URI = os.getenv(
-    "YANDEX_REDIRECT_URI",
-    "https://techseo-monitor.ru/yandex/oauth/callback"
-)
+DEFAULT_YANDEX_REDIRECT_URI = "https://techseo-monitor.ru/?oauth_provider=yandex"
+YANDEX_REDIRECT_URI = os.getenv("YANDEX_REDIRECT_URI", DEFAULT_YANDEX_REDIRECT_URI)
+
+if YANDEX_REDIRECT_URI.rstrip("/") == "https://techseo-monitor.ru/yandex/oauth/callback":
+    YANDEX_REDIRECT_URI = DEFAULT_YANDEX_REDIRECT_URI
 
 YANDEX_GPT_API_KEY = os.getenv(
     "YANDEX_GPT_API_KEY",

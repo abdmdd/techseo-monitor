@@ -93,8 +93,14 @@ def _expires_at(tokens):
     return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
 
 
+def get_yandex_redirect_uri():
+    return YANDEX_REDIRECT_URI
+
+
 def generate_yandex_auth_url(user_id, site_id):
-    if not YANDEX_CLIENT_ID or not YANDEX_REDIRECT_URI:
+    redirect_uri = get_yandex_redirect_uri()
+
+    if not YANDEX_CLIENT_ID or not redirect_uri:
         raise ValueError("Yandex OAuth credentials are not configured.")
 
     if not _ensure_site_owner(user_id, site_id):
@@ -108,7 +114,7 @@ def generate_yandex_auth_url(user_id, site_id):
     query = urlencode({
         "response_type": "code",
         "client_id": YANDEX_CLIENT_ID,
-        "redirect_uri": YANDEX_REDIRECT_URI,
+        "redirect_uri": redirect_uri,
         "state": state,
     })
     return f"{YANDEX_AUTH_URL}?{query}"

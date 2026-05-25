@@ -64,11 +64,27 @@ apply_global_styles()
 init_auth_state()
 
 
-def handle_yandex_oauth_callback():
-    code = st.query_params.get("code")
-    state = st.query_params.get("state")
+def get_query_param(name):
+    if hasattr(st, "query_params"):
+        return st.query_params.get(name)
 
-    if not code and not state:
+    values = st.experimental_get_query_params().get(name)
+    return values[0] if values else None
+
+
+def clear_query_params():
+    if hasattr(st, "query_params"):
+        st.query_params.clear()
+    else:
+        st.experimental_set_query_params()
+
+
+def handle_yandex_oauth_callback():
+    oauth_provider = get_query_param("oauth_provider")
+    code = get_query_param("code")
+    state = get_query_param("state")
+
+    if oauth_provider != "yandex":
         return
 
     st.session_state["main_menu"] = "Мои сайты"
@@ -76,13 +92,13 @@ def handle_yandex_oauth_callback():
 
     if not code or not payload:
         st.session_state["yandex_oauth_error"] = "Не удалось проверить OAuth state Яндекса."
-        st.query_params.clear()
+        clear_query_params()
         st.rerun()
 
     current_user = get_current_user()
     if current_user and current_user["id"] != payload["user_id"]:
         st.session_state["yandex_oauth_error"] = "OAuth callback не совпадает с текущим пользователем."
-        st.query_params.clear()
+        clear_query_params()
         st.rerun()
 
     try:
@@ -101,7 +117,7 @@ def handle_yandex_oauth_callback():
     elif "yandex_oauth_error" not in st.session_state:
         st.session_state["yandex_oauth_error"] = "Не удалось сохранить подключение Яндекс Вебмастера."
 
-    st.query_params.clear()
+    clear_query_params()
     st.rerun()
 
 
