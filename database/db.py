@@ -96,6 +96,64 @@ def migrate_sites_unique_url(cursor):
     cursor.execute("DROP TABLE sites_legacy")
 
 
+def migrate_yandex_integrations_nullable_site(cursor):
+    cursor.execute("PRAGMA table_info(yandex_integrations)")
+    columns = cursor.fetchall()
+
+    if not columns:
+        return
+
+    site_id_column = next((column for column in columns if column[1] == "site_id"), None)
+    if not site_id_column or not site_id_column[3]:
+        return
+
+    cursor.execute("DROP INDEX IF EXISTS idx_yandex_integrations_unique")
+    cursor.execute("DROP INDEX IF EXISTS idx_yandex_integrations_user_site")
+    cursor.execute("DROP INDEX IF EXISTS idx_yandex_integrations_account_unique")
+    cursor.execute("ALTER TABLE yandex_integrations RENAME TO yandex_integrations_legacy")
+    cursor.execute("""
+        CREATE TABLE yandex_integrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            site_id INTEGER,
+            service_type TEXT NOT NULL,
+            access_token TEXT,
+            refresh_token TEXT,
+            expires_at TEXT,
+            connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'connected',
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute("""
+        INSERT INTO yandex_integrations
+        (
+            id,
+            user_id,
+            site_id,
+            service_type,
+            access_token,
+            refresh_token,
+            expires_at,
+            connected_at,
+            status
+        )
+        SELECT
+            id,
+            user_id,
+            site_id,
+            service_type,
+            access_token,
+            refresh_token,
+            expires_at,
+            connected_at,
+            status
+        FROM yandex_integrations_legacy
+    """)
+    cursor.execute("DROP TABLE yandex_integrations_legacy")
+
+
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
@@ -225,7 +283,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS yandex_integrations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            site_id INTEGER NOT NULL,
+            site_id INTEGER,
             service_type TEXT NOT NULL,
             access_token TEXT,
             refresh_token TEXT,
@@ -238,6 +296,7 @@ def init_db():
     """)
 
     migrate_sites_unique_url(cursor)
+    migrate_yandex_integrations_nullable_site(cursor)
 
     if not column_exists(cursor, "sites", "user_id"):
         cursor.execute("ALTER TABLE sites ADD COLUMN user_id INTEGER")
@@ -291,6 +350,11 @@ def init_db():
     cursor.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_yandex_integrations_unique
         ON yandex_integrations(user_id, site_id, service_type)
+    """)
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_yandex_integrations_account_unique
+        ON yandex_integrations(user_id, service_type)
+        WHERE site_id IS NULL
     """)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_yandex_integrations_user_site

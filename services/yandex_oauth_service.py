@@ -59,10 +59,10 @@ def _verify_state(state):
         if issued_at < int(time.time()) - STATE_MAX_AGE_SECONDS:
             return None
 
-        return {
-            "user_id": int(payload["user_id"]),
-            "site_id": int(payload["site_id"]),
-        }
+        parsed = {"user_id": int(payload["user_id"])}
+        if payload.get("site_id") is not None:
+            parsed["site_id"] = int(payload["site_id"])
+        return parsed
     except (ValueError, TypeError, KeyError, json.JSONDecodeError):
         return None
 
@@ -72,6 +72,9 @@ def parse_yandex_oauth_state(state):
 
 
 def _ensure_site_owner(user_id, site_id):
+    if site_id is None:
+        return True
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM sites WHERE id = ? AND user_id = ?", (site_id, user_id))
@@ -93,22 +96,42 @@ def _expires_at(tokens):
     return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
 
 
+def _parse_expires_at(value):
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _token_expired(expires_at):
+    parsed = _parse_expires_at(expires_at)
+    if not parsed:
+        return False
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed <= datetime.now(timezone.utc) + timedelta(minutes=2)
+
+
 def get_yandex_redirect_uri():
     return YANDEX_REDIRECT_URI
 
 
-def generate_yandex_auth_url(user_id, site_id):
+def generate_yandex_auth_url(user_id, site_id=None):
     redirect_uri = get_yandex_redirect_uri()
 
     if not YANDEX_CLIENT_ID or not redirect_uri:
         raise ValueError("Yandex OAuth credentials are not configured.")
 
-    if not _ensure_site_owner(user_id, site_id):
+    if site_id is not None and not _ensure_site_owner(user_id, site_id):
         raise ValueError("Site was not found or does not belong to the current user.")
 
     state = _sign_state({
         "user_id": int(user_id),
-        "site_id": int(site_id),
         "iat": int(time.time()),
     })
     query = urlencode({
@@ -160,8 +183,12 @@ def refresh_access_token(refresh_token):
     return response.json()
 
 
-def save_yandex_integration(user_id, site_id, tokens):
-    if not _ensure_site_owner(user_id, site_id):
+def save_yandex_integration(user_id, site_id=None, tokens=None):
+    if tokens is None:
+        tokens = site_id
+        site_id = None
+
+    if site_id is not None and not _ensure_site_owner(user_id, site_id):
         return False
 
     access_token = tokens.get("access_token")
@@ -186,7 +213,8 @@ def save_yandex_integration(user_id, site_id, tokens):
             status
         )
         VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'connected')
-        ON CONFLICT(user_id, site_id, service_type)
+        ON CONFLICT(user_id, service_type)
+        WHERE site_id IS NULL
         DO UPDATE SET
             access_token = excluded.access_token,
             refresh_token = COALESCE(excluded.refresh_token, yandex_integrations.refresh_token),
@@ -195,7 +223,7 @@ def save_yandex_integration(user_id, site_id, tokens):
             status = 'connected'
     """, (
         user_id,
-        site_id,
+        None,
         YANDEX_SERVICE_WEBMASTER,
         access_token,
         refresh_token,
@@ -206,27 +234,33 @@ def save_yandex_integration(user_id, site_id, tokens):
     return True
 
 
-def get_yandex_integration_status(user_id, site_id):
+def _get_account_integration_row(user_id):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT
+            id,
             status,
             connected_at,
             expires_at,
             access_token,
             refresh_token
         FROM yandex_integrations
-        WHERE user_id = ? AND site_id = ? AND service_type = ?
+        WHERE user_id = ? AND site_id IS NULL AND service_type = ?
         LIMIT 1
-    """, (user_id, site_id, YANDEX_SERVICE_WEBMASTER))
+    """, (user_id, YANDEX_SERVICE_WEBMASTER))
     row = cursor.fetchone()
     conn.close()
+    return row
 
-    if not row or row[0] != "connected":
+
+def get_yandex_integration_status(user_id, site_id=None):
+    row = _get_account_integration_row(user_id)
+
+    if not row or row[1] != "connected":
         return {
             "connected": False,
-            "status": row[0] if row else "disconnected",
+            "status": row[1] if row else "disconnected",
             "connected_at": None,
             "expires_at": None,
             "token_status": "missing",
@@ -234,15 +268,58 @@ def get_yandex_integration_status(user_id, site_id):
 
     return {
         "connected": True,
-        "status": row[0],
-        "connected_at": row[1],
-        "expires_at": row[2],
-        "token_status": "stored" if row[3] else "missing",
-        "has_refresh_token": bool(row[4]),
+        "status": row[1],
+        "connected_at": row[2],
+        "expires_at": row[3],
+        "token_status": "stored" if row[4] else "missing",
+        "has_refresh_token": bool(row[5]),
+        "token_expired": _token_expired(row[3]),
     }
 
 
-def disconnect_yandex_integration(user_id, site_id):
+def get_yandex_access_token(user_id):
+    row = _get_account_integration_row(user_id)
+
+    if not row or row[1] != "connected":
+        return None, "not_connected"
+
+    integration_id, _, _, expires_at, access_token, refresh_token = row
+
+    if access_token and not _token_expired(expires_at):
+        return access_token, None
+
+    if not refresh_token:
+        return None, "reconnect_required"
+
+    try:
+        tokens = refresh_access_token(refresh_token)
+    except (requests.RequestException, ValueError):
+        return None, "reconnect_required"
+
+    new_access_token = tokens.get("access_token")
+    if not new_access_token:
+        return None, "reconnect_required"
+
+    new_refresh_token = tokens.get("refresh_token") or refresh_token
+    new_expires_at = _expires_at(tokens)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE yandex_integrations
+        SET
+            access_token = ?,
+            refresh_token = ?,
+            expires_at = ?,
+            status = 'connected'
+        WHERE id = ?
+    """, (new_access_token, new_refresh_token, new_expires_at, integration_id))
+    conn.commit()
+    conn.close()
+    return new_access_token, None
+
+
+def disconnect_yandex_integration(user_id, site_id=None):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -252,8 +329,8 @@ def disconnect_yandex_integration(user_id, site_id):
             refresh_token = NULL,
             expires_at = NULL,
             status = 'disconnected'
-        WHERE user_id = ? AND site_id = ? AND service_type = ?
-    """, (user_id, site_id, YANDEX_SERVICE_WEBMASTER))
+        WHERE user_id = ? AND site_id IS NULL AND service_type = ?
+    """, (user_id, YANDEX_SERVICE_WEBMASTER))
     conn.commit()
     affected = cursor.rowcount
     conn.close()

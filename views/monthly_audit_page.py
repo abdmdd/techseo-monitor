@@ -7,6 +7,14 @@ import streamlit as st
 from components.ui_helpers import metric_card, recommendation_card, warnings_block
 from services.ai_service import generate_ai_recommendations, generate_ai_summary
 from services.audit_service import enqueue_monthly_audit, get_latest_monthly_audit_job
+from services.yandex_oauth_service import get_yandex_access_token, get_yandex_integration_status
+from services.yandex_webmaster_service import (
+    find_matching_host,
+    get_host_summary,
+    get_indexing_status,
+    get_robots_info,
+    get_sitemap_info,
+)
 from views.auth_page import require_user_id
 from views.cached_data import cached_get_sites, clear_cached_data
 
@@ -924,7 +932,63 @@ def reviews_sources(yandex_reviews_url, google_reviews_url, twogis_reviews_url):
     kv_card("Источники отзывов", rows)
 
 
-def render_audit_sections(url, result, score, errors_count, yandex_reviews_url, google_reviews_url, twogis_reviews_url):
+def render_webmaster_api_block(title, result):
+    st.markdown(f"#### {title}")
+    if result.get("ok"):
+        st.json(result.get("data") or {})
+    else:
+        st.warning(result.get("error") or "API Яндекс Вебмастера вернул ошибку.")
+
+
+def render_yandex_webmaster_section(user_id, site_url):
+    status = get_yandex_integration_status(user_id)
+
+    if not status["connected"]:
+        st.info("Яндекс Вебмастер не подключён. Подключите общий аккаунт в разделе «Мои сайты».")
+        return
+
+    st.success("Яндекс Вебмастер подключён")
+    st.caption(f"Дата подключения: {status.get('connected_at') or '—'}")
+
+    access_token, token_error = get_yandex_access_token(user_id)
+    if token_error == "reconnect_required":
+        st.error("Нужно переподключить Яндекс.")
+        return
+    if token_error or not access_token:
+        st.warning("Не удалось получить активный токен Яндекс Вебмастера.")
+        return
+
+    match = find_matching_host(access_token, site_url)
+    if not match.get("ok"):
+        st.warning(match.get("error") or "Не удалось получить список сайтов из Яндекс Вебмастера.")
+        return
+
+    if not match.get("found"):
+        st.warning("Добавьте сайт в Яндекс Вебмастер или проверьте, что домен совпадает.")
+        return
+
+    host_id = match.get("host_id")
+    host = match.get("host") or {}
+    webmaster_url = f"https://webmaster.yandex.ru/site/dashboard/?host={host_id}"
+
+    kv_card(
+        "Статус сайта в Яндекс Вебмастере",
+        [
+            ("Сайт найден", "Да"),
+            ("host_id", host_id or "—"),
+            ("URL в Вебмастере", host.get("unicode_host_url") or host.get("ascii_host_url") or "—"),
+        ],
+    )
+    if host_id:
+        st.link_button("Открыть в Яндекс Вебмастере", webmaster_url, use_container_width=True)
+
+    render_webmaster_api_block("Сводка по сайту", get_host_summary(access_token, host_id))
+    render_webmaster_api_block("Индексация", get_indexing_status(access_token, host_id))
+    render_webmaster_api_block("Sitemap", get_sitemap_info(access_token, host_id))
+    render_webmaster_api_block("Robots", get_robots_info(access_token, host_id))
+
+
+def render_audit_sections(user_id, url, result, score, errors_count, yandex_reviews_url, google_reviews_url, twogis_reviews_url):
     ai_summary = generate_ai_summary(score, errors_count)
 
     section_header("Сводка аудита", "Короткое объяснение результата и рекомендации по текущему аудиту.")
@@ -958,6 +1022,7 @@ def render_audit_sections(url, result, score, errors_count, yandex_reviews_url, 
         "Sitemap / Robots",
         "Meta / Canonical",
         "Ссылки / Редиректы / Отзывы",
+        "Яндекс Вебмастер",
         "Центр ошибок",
     ]
     selected_section = st.radio(
@@ -1055,6 +1120,10 @@ def render_audit_sections(url, result, score, errors_count, yandex_reviews_url, 
         reviews_sources(yandex_reviews_url, google_reviews_url, twogis_reviews_url)
 
     elif selected_section == audit_sections[4]:
+        section_header("Яндекс Вебмастер", "Данные из общего аккаунта Яндекс Вебмастера для выбранного сайта.")
+        render_yandex_webmaster_section(user_id, url)
+
+    elif selected_section == audit_sections[5]:
         section_header("SEO-помощник", "Понятные рекомендации для владельца бизнеса: что случилось, почему это важно и как исправить.")
         render_error_center(result)
 
@@ -1193,6 +1262,7 @@ def show_monthly_audit_page():
     result = audit_data["result"]
 
     render_audit_sections(
+        user_id=user_id,
         url=url,
         result=result,
         score=audit_data["score"],

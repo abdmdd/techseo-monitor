@@ -89,18 +89,17 @@ def site_card(site, audit):
     )
 
 
-def yandex_webmaster_oauth_card(user_id, site):
-    site_id = site[0]
-    status = get_yandex_integration_status(user_id, site_id)
+def yandex_webmaster_integration_block(user_id):
+    status = get_yandex_integration_status(user_id)
 
-    st.markdown("##### Яндекс Вебмастер")
+    st.markdown("#### Яндекс Вебмастер")
 
     if status["connected"]:
         st.success("Подключено")
         st.caption(f"Дата подключения: {status.get('connected_at') or '—'}")
 
-        if st.button("Отключить Яндекс Вебмастер", key=f"disconnect_yandex_webmaster_{site_id}", use_container_width=True):
-            if disconnect_yandex_integration(user_id, site_id):
+        if st.button("Отключить Яндекс Вебмастер", key="disconnect_yandex_webmaster", use_container_width=True):
+            if disconnect_yandex_integration(user_id):
                 st.success("Яндекс Вебмастер отключён.")
                 st.rerun()
             else:
@@ -108,7 +107,7 @@ def yandex_webmaster_oauth_card(user_id, site):
         return
 
     try:
-        auth_url = generate_yandex_auth_url(user_id, site_id)
+        auth_url = generate_yandex_auth_url(user_id)
     except ValueError as exc:
         st.warning(str(exc))
         return
@@ -372,11 +371,10 @@ def show_sites_page():
                     site_card(site, audits_by_url.get(site[2]))
 
                     st.link_button("Открыть сайт", site[2], use_container_width=True)
-                    yandex_webmaster_oauth_card(user_id, site)
 
     section_header(
         "Интеграции",
-        "Архитектурные блоки для подключения данных без OAuth backend на этом этапе."
+        "Общие подключения аккаунта, которые используются для всех сайтов пользователя."
     )
 
-    show_integration_center()
+    yandex_webmaster_integration_block(user_id)

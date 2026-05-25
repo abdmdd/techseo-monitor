@@ -105,7 +105,6 @@ def handle_yandex_oauth_callback():
         tokens = exchange_code_for_token(code)
         saved = save_yandex_integration(
             user_id=payload["user_id"],
-            site_id=payload["site_id"],
             tokens=tokens,
         )
     except Exception as exc:
