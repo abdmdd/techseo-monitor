@@ -2,7 +2,6 @@ import os
 import sys
 
 import streamlit as st
-from dotenv import load_dotenv
 
 # ==================================================
 # PATH
@@ -31,13 +30,6 @@ from views.quarterly_audit_page import show_quarterly_audit_page
 from views.sites_page import show_sites_page
 
 # ==================================================
-# INIT
-# ==================================================
-
-init_db()
-load_dotenv()
-
-# ==================================================
 # PAGE CONFIG
 # ==================================================
 
@@ -46,6 +38,18 @@ st.set_page_config(
     page_icon="TS",
     layout="wide"
 )
+
+# ==================================================
+# INIT
+# ==================================================
+
+@st.cache_resource(show_spinner=False)
+def bootstrap_app():
+    init_db()
+    return True
+
+
+bootstrap_app()
 
 # ==================================================
 # GLOBAL UI / AUTH GATE

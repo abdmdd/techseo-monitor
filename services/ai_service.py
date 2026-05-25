@@ -1,19 +1,20 @@
 import json
-import os
 
 import requests
-from dotenv import load_dotenv
 
+from config.settings import (
+    YANDEX_GPT_API_KEY,
+    YANDEX_GPT_FOLDER_ID,
+    YANDEX_GPT_MODEL,
+    YANDEX_GPT_TIMEOUT,
+)
 from services.score_service import build_score_summary
 
 
-load_dotenv()
-
-YANDEX_GPT_API_KEY = os.getenv("YANDEX_GPT_API_KEY", "").strip()
-YANDEX_GPT_FOLDER_ID = os.getenv("YANDEX_GPT_FOLDER_ID", "").strip()
-YANDEX_GPT_MODEL = os.getenv("YANDEX_GPT_MODEL", "yandexgpt-lite").strip()
+YANDEX_GPT_API_KEY = YANDEX_GPT_API_KEY.strip()
+YANDEX_GPT_FOLDER_ID = YANDEX_GPT_FOLDER_ID.strip()
+YANDEX_GPT_MODEL = YANDEX_GPT_MODEL.strip()
 YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
-YANDEX_GPT_TIMEOUT = float(os.getenv("YANDEX_GPT_TIMEOUT", "20"))
 
 
 def yandex_gpt_available():

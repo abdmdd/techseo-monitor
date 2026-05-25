@@ -6,12 +6,15 @@ from urllib.parse import quote_plus
 import streamlit as st
 
 from database.db import (
-    get_quarterly_audit_checks,
-    get_quarterly_audit_history,
-    get_sites,
     upsert_quarterly_audit_check,
 )
 from views.auth_page import get_current_user, require_user_id
+from views.cached_data import (
+    cached_get_quarterly_audit_checks,
+    cached_get_quarterly_audit_history,
+    cached_get_sites,
+    clear_cached_data,
+)
 
 
 STATUS_OPTIONS = ["all_good", "needs_fix", "acceptable"]
@@ -313,6 +316,8 @@ def _save_cell(user_id, site_id, check_key, user_name, has_speed=False):
         inp=None,
         cls=None,
     )
+    clear_cached_data()
+    st.session_state.pop("quarterly_export_data", None)
     st.session_state["quarterly_audit_saved_at"] = datetime.now().strftime("%H:%M:%S")
 
 
@@ -344,6 +349,8 @@ def _apply_date_to_site(user_id, site, selected_date, saved_checks, user_name):
             cls=None,
         )
 
+    clear_cached_data()
+    st.session_state.pop("quarterly_export_data", None)
     st.session_state["quarterly_audit_saved_at"] = datetime.now().strftime("%H:%M:%S")
 
 
@@ -738,7 +745,7 @@ def _render_workspace_section(title, checks, visible_sites, sites_by_id, saved_c
 
 
 def _render_history(user_id, sites_by_id):
-    history = get_quarterly_audit_history(user_id=user_id, limit=60)
+    history = cached_get_quarterly_audit_history(user_id=user_id, limit=60)
     if not history:
         st.markdown(
             '<div class="qa-empty">История появится после первых сохранений в таблице.</div>',
@@ -1219,9 +1226,9 @@ def show_quarterly_audit_page():
     user_id = require_user_id()
     user = get_current_user() or {}
     user_name = user.get("name") or user.get("email") or "SEO специалист"
-    sites = get_sites(user_id=user_id)
+    sites = cached_get_sites(user_id=user_id)
     sites_by_id = {site[0]: site for site in sites}
-    saved_checks = get_quarterly_audit_checks(user_id=user_id)
+    saved_checks = cached_get_quarterly_audit_checks(user_id=user_id)
 
     _render_css()
 
@@ -1303,27 +1310,41 @@ def show_quarterly_audit_page():
         st.info("Выберите хотя бы один сайт, чтобы показать таблицу.")
         return
 
-    export_data = _export_quarterly_excel(
-        visible_sites,
-        saved_checks,
-        get_quarterly_audit_history(user_id=user_id, limit=500),
-    )
-    st.download_button(
+    if st.button("Подготовить Excel", use_container_width=True):
+        st.session_state["quarterly_export_data"] = _export_quarterly_excel(
+            visible_sites,
+            saved_checks,
+            cached_get_quarterly_audit_history(user_id=user_id, limit=500),
+        )
+        st.session_state["quarterly_export_filename"] = (
+            f"quarterly_seo_workspace_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        )
+
+    if st.session_state.get("quarterly_export_data"):
+        st.download_button(
         "Скачать Excel",
-        data=export_data,
-        file_name=f"quarterly_seo_workspace_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
+            data=st.session_state["quarterly_export_data"],
+            file_name=st.session_state.get("quarterly_export_filename", "quarterly_seo_workspace.xlsx"),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
     st.markdown(
         '<div class="qa-helper">После F5 статусы, комментарии, даты и score-метрики останутся на месте. Excel выгружается по выбранным колонкам сайтов.</div>',
         unsafe_allow_html=True,
     )
 
-    tabs = st.tabs(["SEO workspace", "История изменений"])
+    # Legacy tabs were replaced by the radio below so inactive sections do not render.
 
-    with tabs[0]:
+    quarterly_sections = ["SEO workspace", "History"]
+    selected_quarterly_section = st.radio(
+        "Раздел quarterly audit",
+        quarterly_sections,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    if selected_quarterly_section == quarterly_sections[0]:
         st.markdown('<div class="qa-workspace-header">', unsafe_allow_html=True)
         header_cols = st.columns([1.15] + [1 for _ in visible_sites], gap="medium")
         with header_cols[0]:
@@ -1346,7 +1367,7 @@ def show_quarterly_audit_page():
             user_name,
         )
 
-        with st.expander("Ежемесячный аудит", expanded=False):
+        if st.checkbox("Показать ежемесячный блок", value=False):
             _render_workspace_section(
                 "Ежемесячный аудит",
                 MONTHLY_CHECKS,
@@ -1357,7 +1378,7 @@ def show_quarterly_audit_page():
                 user_name,
             )
 
-    with tabs[1]:
+    elif selected_quarterly_section == quarterly_sections[1]:
         st.markdown(
             '<div class="qa-helper">История хранит старые и новые значения статуса и комментария для каждой измененной проверки.</div>',
             unsafe_allow_html=True,

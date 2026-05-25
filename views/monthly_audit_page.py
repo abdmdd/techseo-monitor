@@ -5,22 +5,27 @@ import pandas as pd
 import streamlit as st
 
 from components.ui_helpers import metric_card, recommendation_card, warnings_block
-from database.db import get_sites
 from services.ai_service import generate_ai_recommendations, generate_ai_summary
 from services.audit_service import enqueue_monthly_audit, get_latest_monthly_audit_job
 from views.auth_page import require_user_id
+from views.cached_data import cached_get_sites, clear_cached_data
 
 
 def select_site_from_db(label):
-    sites = get_sites(user_id=require_user_id())
+    sites = cached_get_sites(user_id=require_user_id())
 
     if sites:
-        site_options = {
+        site_options = {"": None}
+        site_options.update({
             f"{site[1]} - {site[2]}": site
             for site in sites
-        }
+        })
 
-        selected_site_label = st.selectbox(label, list(site_options.keys()))
+        selected_site_label = st.selectbox(
+            label,
+            list(site_options.keys()),
+            format_func=lambda option: "Выберите сайт" if not option else option,
+        )
         return site_options[selected_site_label]
 
     st.warning("Сначала добавьте сайт во вкладке «Мои сайты».")
@@ -933,7 +938,13 @@ def render_audit_sections(url, result, score, errors_count, yandex_reviews_url, 
     st.info(ai_summary["summary"])
     warnings_block(result.get("crawler_warnings", []))
 
-    recommendations = generate_ai_recommendations(result)
+    recommendations_key = f"monthly_ai_recommendations_{url}_{score}_{errors_count}"
+    recommendations = st.session_state.get(recommendations_key)
+
+    if st.button("Получить рекомендации YandexGPT", key=f"{recommendations_key}_button", use_container_width=True):
+        with st.spinner("Готовим рекомендации через YandexGPT..."):
+            recommendations = generate_ai_recommendations(result)
+            st.session_state[recommendations_key] = recommendations
 
     if recommendations:
         with st.expander("Рекомендации нейросети", expanded=False):
@@ -942,15 +953,21 @@ def render_audit_sections(url, result, score, errors_count, yandex_reviews_url, 
 
     section_header("Разделы аудита", "Детальные зоны проверки сгруппированы по SEO-модулям.")
 
-    tab_summary, tab_index, tab_meta, tab_links, tab_errors = st.tabs([
+    audit_sections = [
         "Обзор",
         "Sitemap / Robots",
         "Meta / Canonical",
         "Ссылки / Редиректы / Отзывы",
         "Центр ошибок",
-    ])
+    ]
+    selected_section = st.radio(
+        "Раздел аудита",
+        audit_sections,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
-    with tab_summary:
+    if selected_section == audit_sections[0]:
         section_header("Сводка полного обхода", "Метрики обхода сайта из последнего аудита.")
         render_full_crawl_summary(result)
 
@@ -1000,14 +1017,14 @@ def render_audit_sections(url, result, score, errors_count, yandex_reviews_url, 
                 ]
             )
 
-    with tab_index:
+    elif selected_section == audit_sections[1]:
         section_header("Sitemap.xml PRO", "Проверяем, доступна ли карта сайта, корректен ли XML и нет ли в ней проблемных URL.")
         render_sitemap_pro(result)
 
         section_header("Robots.txt PRO", "Проверяем правила обхода сайта: User-agent, Sitemap directive, полную блокировку и важные закрытые разделы.")
         render_robots_pro(result)
 
-    with tab_meta:
+    elif selected_section == audit_sections[2]:
         section_header("SEO Meta Audit PRO", "Полная проверка Title, Description и H1 по каждой странице: длина, дубли, отсутствие и понятные рекомендации.")
         meta_table(result, url)
 
@@ -1027,7 +1044,7 @@ def render_audit_sections(url, result, score, errors_count, yandex_reviews_url, 
                 ]
             )
 
-    with tab_links:
+    elif selected_section == audit_sections[3]:
         section_header("Broken Links", "Таблица URL, HTTP status и страница-источник.")
         broken_links_table(result)
 
@@ -1037,7 +1054,7 @@ def render_audit_sections(url, result, score, errors_count, yandex_reviews_url, 
         section_header("Reviews", "Подготовка к review monitoring без изменения crawler logic.")
         reviews_sources(yandex_reviews_url, google_reviews_url, twogis_reviews_url)
 
-    with tab_errors:
+    elif selected_section == audit_sections[4]:
         section_header("SEO-помощник", "Понятные рекомендации для владельца бизнеса: что случилось, почему это важно и как исправить.")
         render_error_center(result)
 
@@ -1079,6 +1096,10 @@ def render_monthly_job_status(job):
 def show_monthly_audit_page():
     user_id = require_user_id()
     selected_site = select_site_from_db("Выберите сайт для аудита")
+
+    if not selected_site:
+        st.info("Выберите сайт, чтобы загрузить последний аудит и тяжелые таблицы результатов.")
+        return
 
     site_id = selected_site[0]
     url = selected_site[2]
@@ -1141,6 +1162,7 @@ def show_monthly_audit_page():
     if st.button(button_label, type="primary", use_container_width=True, disabled=bool(is_running)):
         try:
             latest_job = enqueue_monthly_audit(url=url, user_id=user_id, site_id=site_id)
+            clear_cached_data()
             st.success("Аудит поставлен в очередь. Можно продолжать работать с платформой.")
             st.rerun()
         except Exception as exc:
@@ -1149,7 +1171,7 @@ def show_monthly_audit_page():
     render_monthly_job_status(latest_job)
 
     if latest_job and latest_job.get("status") in ("queued", "running"):
-        time.sleep(5)
+        time.sleep(15)
         st.rerun()
 
     if not audit_data:

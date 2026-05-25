@@ -1,13 +1,7 @@
-import os
-
 import streamlit as st
-from dotenv import load_dotenv
 
+from config.settings import YANDEX_WEBMASTER_TOKEN
 from integrations.yandex_webmaster import get_yandex_webmaster_data
-
-
-load_dotenv()
-YANDEX_WEBMASTER_TOKEN = os.getenv("YANDEX_WEBMASTER_TOKEN")
 
 
 def get_host_id_from_url(url):

@@ -2,8 +2,8 @@ import pandas as pd
 import streamlit as st
 
 from components.ui_helpers import page_header
-from database.db import get_audit_history
 from views.auth_page import require_user_id
+from views.cached_data import cached_get_audit_history
 
 
 def show_history_page():
@@ -12,7 +12,7 @@ def show_history_page():
         "Здесь собраны последние проверки сайтов без лишних графиков и технического шума."
     )
 
-    history = get_audit_history(user_id=require_user_id())
+    history = cached_get_audit_history(user_id=require_user_id())
 
     if not history:
         st.info("История пока пустая. Запустите первый аудит, и здесь появятся результаты.")

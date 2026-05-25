@@ -47,6 +47,26 @@ YANDEX_WEBMASTER_TOKEN = os.getenv(
     ""
 )
 
+YANDEX_GPT_API_KEY = os.getenv(
+    "YANDEX_GPT_API_KEY",
+    ""
+)
+
+YANDEX_GPT_FOLDER_ID = os.getenv(
+    "YANDEX_GPT_FOLDER_ID",
+    ""
+)
+
+YANDEX_GPT_MODEL = os.getenv(
+    "YANDEX_GPT_MODEL",
+    "yandexgpt-lite"
+)
+
+YANDEX_GPT_TIMEOUT = float(os.getenv(
+    "YANDEX_GPT_TIMEOUT",
+    "20"
+))
+
 
 # ==================================================
 # GOOGLE

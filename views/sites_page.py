@@ -4,8 +4,9 @@ from urllib.parse import urlparse
 import streamlit as st
 
 from components.ui_helpers import metric_card
-from database.db import add_site, get_audit_history, get_sites
+from database.db import add_site
 from views.auth_page import require_user_id
+from views.cached_data import cached_get_audit_history, cached_get_sites, clear_cached_data
 
 
 def get_domain(url):
@@ -243,6 +244,7 @@ def show_add_site_form(user_id):
                     twogis_reviews_url,
                     user_id=user_id
                 )
+                clear_cached_data()
                 st.session_state.show_add_site_form = False
                 st.success(f"Сайт добавлен: {site_name}")
                 st.rerun()
@@ -264,8 +266,8 @@ def show_empty_state():
 
 def show_sites_page():
     user_id = require_user_id()
-    sites = get_sites(user_id=user_id)
-    history = get_audit_history(user_id=user_id)
+    sites = cached_get_sites(user_id=user_id)
+    history = cached_get_audit_history(user_id=user_id)
     audits_by_url = latest_audit_by_url(history)
 
     sites_count = len(sites)
