@@ -158,7 +158,7 @@ menu = st.sidebar.radio(
         "Мои сайты",
         "Ежемесячный аудит",
         "Ежеквартальный аудит",
-        "Нейросети",
+        "AI Hub",
         "Конкуренты",
         "История проверок",
         "Настройки"
@@ -182,7 +182,7 @@ elif menu == "Ежемесячный аудит":
     show_monthly_audit_page()
 elif menu == "Ежеквартальный аудит":
     show_quarterly_audit_page()
-elif menu == "Нейросети":
+elif menu == "AI Hub":
     show_meta_generator_page()
 elif menu == "Конкуренты":
     show_competitors_page()

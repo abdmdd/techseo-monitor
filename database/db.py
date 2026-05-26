@@ -329,6 +329,20 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ai_audit_insights (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            site_id INTEGER NOT NULL,
+            audit_id INTEGER,
+            summary_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE,
+            FOREIGN KEY (audit_id) REFERENCES audit_jobs(id) ON DELETE SET NULL
+        )
+    """)
+
     migrate_sites_unique_url(cursor)
     migrate_yandex_integrations_nullable_site(cursor)
 
@@ -401,6 +415,10 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_seo_monitoring_settings_due
         ON seo_monitoring_settings(enabled, next_run_at)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ai_audit_insights_latest
+        ON ai_audit_insights(user_id, site_id, id)
     """)
 
     conn.commit()
@@ -946,6 +964,63 @@ def mark_seo_monitoring_sent(user_id, last_run_at, next_run_at):
     affected = cursor.rowcount
     conn.close()
     return affected > 0
+
+
+def save_ai_audit_insight(user_id, site_id, audit_id, summary_json):
+    payload = summary_json if isinstance(summary_json, str) else json.dumps(summary_json, ensure_ascii=False)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO ai_audit_insights
+        (
+            user_id,
+            site_id,
+            audit_id,
+            summary_json
+        )
+        VALUES (?, ?, ?, ?)
+    """, (user_id, site_id, audit_id, payload))
+    conn.commit()
+    insight_id = cursor.lastrowid
+    conn.close()
+    return insight_id
+
+
+def get_latest_ai_audit_insight(user_id, site_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            id,
+            user_id,
+            site_id,
+            audit_id,
+            summary_json,
+            created_at
+        FROM ai_audit_insights
+        WHERE user_id = ? AND site_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (user_id, site_id))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    try:
+        summary = json.loads(row[4])
+    except (TypeError, ValueError):
+        summary = {}
+
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "site_id": row[2],
+        "audit_id": row[3],
+        "summary": summary,
+        "created_at": row[5],
+    }
 
 
 def get_site_by_id(site_id, user_id=None):
