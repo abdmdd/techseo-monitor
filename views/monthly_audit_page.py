@@ -1405,9 +1405,6 @@ def render_yandex_webmaster_summary_section(user_id, site_url):
             use_container_width=True,
         )
 
-    if not summary_result.get("ok") or not diagnostics_result.get("ok") or not indexing_result.get("ok"):
-        st.info("Часть данных Вебмастера недоступна. Проверьте права OAuth-приложения и подтверждение сайта в подключенном Яндекс-аккаунте.")
-
 
 def _traffic_table(current, previous):
     metrics = [

@@ -315,6 +315,20 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS seo_monitoring_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            frequency TEXT NOT NULL DEFAULT 'every_3_days',
+            last_run_at TEXT,
+            next_run_at TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
     migrate_sites_unique_url(cursor)
     migrate_yandex_integrations_nullable_site(cursor)
 
@@ -383,6 +397,10 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_yandex_traffic_snapshots_site
         ON yandex_traffic_snapshots(user_id, site_id, created_at)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_seo_monitoring_settings_due
+        ON seo_monitoring_settings(enabled, next_run_at)
     """)
 
     conn.commit()
@@ -806,6 +824,128 @@ def get_sites(user_id=None):
     conn.close()
 
     return rows
+
+
+def _monitoring_settings_row_to_dict(row):
+    if not row:
+        return None
+
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "enabled": bool(row[2]),
+        "frequency": row[3],
+        "last_run_at": row[4],
+        "next_run_at": row[5],
+        "created_at": row[6],
+        "updated_at": row[7],
+    }
+
+
+def get_seo_monitoring_settings(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            id,
+            user_id,
+            enabled,
+            frequency,
+            last_run_at,
+            next_run_at,
+            created_at,
+            updated_at
+        FROM seo_monitoring_settings
+        WHERE user_id = ?
+        LIMIT 1
+    """, (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    return _monitoring_settings_row_to_dict(row) or {
+        "id": None,
+        "user_id": user_id,
+        "enabled": False,
+        "frequency": "every_3_days",
+        "last_run_at": None,
+        "next_run_at": None,
+        "created_at": None,
+        "updated_at": None,
+    }
+
+
+def upsert_seo_monitoring_settings(user_id, enabled, frequency, next_run_at=None):
+    normalized_frequency = frequency if frequency in ("every_3_days", "weekly") else "every_3_days"
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO seo_monitoring_settings
+        (
+            user_id,
+            enabled,
+            frequency,
+            next_run_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id)
+        DO UPDATE SET
+            enabled = excluded.enabled,
+            frequency = excluded.frequency,
+            next_run_at = COALESCE(excluded.next_run_at, seo_monitoring_settings.next_run_at),
+            updated_at = CURRENT_TIMESTAMP
+    """, (
+        user_id,
+        1 if enabled else 0,
+        normalized_frequency,
+        next_run_at,
+    ))
+    conn.commit()
+    conn.close()
+    return get_seo_monitoring_settings(user_id)
+
+
+def get_due_seo_monitoring_settings(now_value):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            id,
+            user_id,
+            enabled,
+            frequency,
+            last_run_at,
+            next_run_at,
+            created_at,
+            updated_at
+        FROM seo_monitoring_settings
+        WHERE enabled = 1
+            AND (
+                next_run_at IS NULL
+                OR next_run_at = ''
+                OR next_run_at <= ?
+            )
+    """, (now_value,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [_monitoring_settings_row_to_dict(row) for row in rows]
+
+
+def mark_seo_monitoring_sent(user_id, last_run_at, next_run_at):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE seo_monitoring_settings
+        SET
+            last_run_at = ?,
+            next_run_at = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ?
+    """, (last_run_at, next_run_at, user_id))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
 
 
 def get_site_by_id(site_id, user_id=None):

@@ -1,10 +1,17 @@
 from html import escape
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import streamlit as st
 
 from components.ui_helpers import metric_card
-from database.db import add_site
+from database.db import (
+    add_site,
+    get_seo_monitoring_settings,
+    mark_seo_monitoring_sent,
+    upsert_seo_monitoring_settings,
+)
+from services.telegram_service import format_all_projects_seo_summary, send_telegram_message
 from services.yandex_oauth_service import (
     disconnect_yandex_integration,
     generate_yandex_auth_url,
@@ -217,6 +224,83 @@ def render_yandex_site_matches(user_id, sites):
                 st.warning(friendly_metrika_error(metrika_match))
             elif metrika_match.get("ok"):
                 st.info("Создайте счётчик Яндекс Метрики и привяжите его к сайту.")
+
+
+def _next_monitoring_run(frequency):
+    days = 7 if frequency == "weekly" else 3
+    return (datetime.utcnow() + timedelta(days=days)).isoformat(timespec="seconds")
+
+
+def automatic_monitoring_block(user_id):
+    settings = get_seo_monitoring_settings(user_id)
+    frequency_options = {
+        "every_3_days": "раз в 3 дня",
+        "weekly": "раз в неделю",
+    }
+    current_frequency = settings.get("frequency") if settings.get("frequency") in frequency_options else "every_3_days"
+
+    st.markdown("#### Автоматический мониторинг")
+    enabled = st.checkbox(
+        "Включить Telegram-сводку",
+        value=bool(settings.get("enabled")),
+        key="seo_monitoring_enabled",
+    )
+    frequency = st.selectbox(
+        "Периодичность",
+        list(frequency_options.keys()),
+        index=list(frequency_options.keys()).index(current_frequency),
+        format_func=lambda value: frequency_options[value],
+        key="seo_monitoring_frequency",
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Сохранить настройки мониторинга", use_container_width=True):
+            upsert_seo_monitoring_settings(
+                user_id=user_id,
+                enabled=enabled,
+                frequency=frequency,
+                next_run_at=_next_monitoring_run(frequency) if enabled else None,
+            )
+            st.success("Настройки автоматического мониторинга сохранены.")
+            st.rerun()
+
+    with col2:
+        if st.button("Отправить тестовую сводку", use_container_width=True):
+            with st.spinner("Собираем SEO-сводку по всем проектам..."):
+                message = format_all_projects_seo_summary(user_id)
+                ok, error = send_telegram_message(message)
+            if ok:
+                now_value = datetime.utcnow().isoformat(timespec="seconds")
+                current_settings = get_seo_monitoring_settings(user_id)
+                if not current_settings.get("id"):
+                    current_settings = upsert_seo_monitoring_settings(
+                        user_id=user_id,
+                        enabled=enabled,
+                        frequency=frequency,
+                        next_run_at=_next_monitoring_run(frequency) if enabled else None,
+                    )
+                mark_seo_monitoring_sent(
+                    user_id,
+                    now_value,
+                    _next_monitoring_run(current_settings.get("frequency")) if current_settings.get("enabled") else current_settings.get("next_run_at"),
+                )
+                st.success("Тестовая Telegram-сводка отправлена.")
+            elif error == "telegram_not_configured":
+                st.warning("Добавьте TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в окружение.")
+            else:
+                st.warning("Не удалось отправить Telegram-сводку. Проверьте настройки бота и chat_id.")
+
+    current_settings = get_seo_monitoring_settings(user_id)
+    kv_card(
+        "Статус Telegram-сводки",
+        [
+            ("Включено", "Да" if current_settings.get("enabled") else "Нет"),
+            ("Периодичность", frequency_options.get(current_settings.get("frequency"), "раз в 3 дня")),
+            ("Последняя отправка", current_settings.get("last_run_at") or "ещё не было"),
+            ("Следующая отправка", current_settings.get("next_run_at") or "не запланирована"),
+        ],
+    )
 
 
 def integration_card(icon, title, status, text):
@@ -478,3 +562,9 @@ def show_sites_page():
     )
 
     yandex_integrations_block(user_id, sites)
+
+    section_header(
+        "Автоматический мониторинг",
+        "Краткая Telegram-сводка по всем проектам: аудит, ошибки, Яндекс Вебмастер и Метрика."
+    )
+    automatic_monitoring_block(user_id)
