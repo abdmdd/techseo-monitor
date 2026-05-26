@@ -8,8 +8,11 @@ from database.db import add_site
 from services.yandex_oauth_service import (
     disconnect_yandex_integration,
     generate_yandex_auth_url,
+    get_yandex_access_token,
     get_yandex_integration_status,
 )
+from services.yandex_metrika_service import find_matching_counter
+from services.yandex_webmaster_service import find_matching_host
 from views.auth_page import require_user_id
 from views.cached_data import cached_get_audit_history, cached_get_sites, clear_cached_data
 
@@ -56,6 +59,28 @@ def section_header(title, subtitle):
     )
 
 
+def kv_card(title, rows):
+    rows_html = "".join(
+        f"""
+        <div class="ts-audit-kv">
+            <span>{escape(str(label))}</span>
+            <strong>{escape(str(value))}</strong>
+        </div>
+        """
+        for label, value in rows
+    )
+
+    st.markdown(
+        f"""
+        <div class="ts-audit-section-card">
+            <div class="ts-audit-section-title">{escape(title)}</div>
+            {rows_html}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
 def site_card(site, audit):
     name = site[1]
     url = site[2]
@@ -89,21 +114,22 @@ def site_card(site, audit):
     )
 
 
-def yandex_webmaster_integration_block(user_id):
+def yandex_integrations_block(user_id, sites):
     status = get_yandex_integration_status(user_id)
 
-    st.markdown("#### Яндекс Вебмастер")
+    st.markdown("#### Интеграции Яндекса")
 
     if status["connected"]:
-        st.success("Подключено")
+        st.success("Аккаунт Яндекса подключён")
         st.caption(f"Дата подключения: {status.get('connected_at') or '—'}")
 
-        if st.button("Отключить Яндекс Вебмастер", key="disconnect_yandex_webmaster", use_container_width=True):
+        if st.button("Отключить Яндекс", key="disconnect_yandex", use_container_width=True):
             if disconnect_yandex_integration(user_id):
-                st.success("Яндекс Вебмастер отключён.")
+                st.success("Яндекс отключён.")
                 st.rerun()
             else:
-                st.warning("Не удалось отключить Яндекс Вебмастер.")
+                st.warning("Не удалось отключить Яндекс.")
+        render_yandex_site_matches(user_id, sites)
         return
 
     try:
@@ -113,10 +139,67 @@ def yandex_webmaster_integration_block(user_id):
         return
 
     st.link_button(
-        "Подключить Яндекс Вебмастер",
+        "Подключить Яндекс",
         auth_url,
         use_container_width=True,
     )
+
+
+def render_yandex_site_matches(user_id, sites):
+    if not sites:
+        st.info("Добавьте сайт, чтобы проверить его в Яндекс Вебмастере и Яндекс Метрике.")
+        return
+
+    access_token, token_error = get_yandex_access_token(user_id)
+    if token_error == "reconnect_required":
+        st.error("Нужно переподключить Яндекс.")
+        return
+    if token_error or not access_token:
+        st.warning("Не удалось получить активный токен Яндекса.")
+        return
+
+    st.markdown("##### Статус по сайтам")
+
+    for site in sites:
+        site_name = site[1]
+        site_url = site[2]
+        webmaster_match = find_matching_host(access_token, site_url)
+        metrika_match = find_matching_counter(access_token, site_url)
+
+        webmaster_found = webmaster_match.get("ok") and webmaster_match.get("found")
+        metrika_found = metrika_match.get("ok") and metrika_match.get("found")
+        webmaster_label = "подключён" if webmaster_found else "не найден сайт"
+        metrika_label = "найден счётчик" if metrika_found else "не найден счётчик"
+
+        kv_card(
+            site_name,
+            [
+                ("Сайт", site_url),
+                ("Яндекс Вебмастер", webmaster_label),
+                ("Яндекс Метрика", metrika_label),
+            ],
+        )
+
+        cols = st.columns(2)
+        host_id = webmaster_match.get("host_id")
+        counter_id = metrika_match.get("counter_id")
+
+        with cols[0]:
+            if host_id:
+                st.link_button(
+                    "Открыть Вебмастер",
+                    f"https://webmaster.yandex.ru/site/dashboard/?host={host_id}",
+                    use_container_width=True,
+                )
+        with cols[1]:
+            if counter_id:
+                st.link_button(
+                    "Открыть Метрику",
+                    f"https://metrika.yandex.ru/dashboard?id={counter_id}",
+                    use_container_width=True,
+                )
+            elif metrika_match.get("ok"):
+                st.info("Создайте счётчик Яндекс Метрики и привяжите его к сайту.")
 
 
 def integration_card(icon, title, status, text):
@@ -306,7 +389,7 @@ def show_sites_page():
     audits_by_url = latest_audit_by_url(history)
 
     if st.session_state.pop("yandex_oauth_success", None):
-        st.success("Яндекс Вебмастер подключён")
+        st.success("Яндекс подключён")
 
     oauth_error = st.session_state.pop("yandex_oauth_error", None)
     if oauth_error:
@@ -373,8 +456,8 @@ def show_sites_page():
                     st.link_button("Открыть сайт", site[2], use_container_width=True)
 
     section_header(
-        "Интеграции",
-        "Общие подключения аккаунта, которые используются для всех сайтов пользователя."
+        "Интеграции Яндекса",
+        "Общее подключение аккаунта Яндекса используется для Вебмастера и Метрики на всех сайтах пользователя."
     )
 
-    yandex_webmaster_integration_block(user_id)
+    yandex_integrations_block(user_id, sites)

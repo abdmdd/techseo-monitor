@@ -8,6 +8,11 @@ from components.ui_helpers import metric_card, recommendation_card, warnings_blo
 from services.ai_service import generate_ai_recommendations, generate_ai_summary
 from services.audit_service import enqueue_monthly_audit, get_latest_monthly_audit_job
 from services.yandex_oauth_service import get_yandex_access_token, get_yandex_integration_status
+from services.yandex_metrika_service import (
+    find_matching_counter,
+    get_goals,
+    get_visits_report,
+)
 from services.yandex_webmaster_service import (
     find_matching_host,
     get_host_summary,
@@ -988,6 +993,84 @@ def render_yandex_webmaster_section(user_id, site_url):
     render_webmaster_api_block("Robots", get_robots_info(access_token, host_id))
 
 
+def render_yandex_metrika_section(user_id, site_url):
+    status = get_yandex_integration_status(user_id)
+
+    if not status["connected"]:
+        st.info("Яндекс не подключён. Подключите общий аккаунт в разделе «Мои сайты».")
+        return
+
+    access_token, token_error = get_yandex_access_token(user_id)
+    if token_error == "reconnect_required":
+        st.error("Нужно переподключить Яндекс.")
+        return
+    if token_error or not access_token:
+        st.warning("Не удалось получить активный токен Яндекса.")
+        return
+
+    match = find_matching_counter(access_token, site_url)
+    if not match.get("ok"):
+        st.warning(match.get("error") or "Не удалось получить список счётчиков Яндекс Метрики.")
+        return
+
+    if not match.get("found"):
+        kv_card(
+            "Яндекс Метрика",
+            [
+                ("Счётчик найден", "Нет"),
+                ("counter_id", "—"),
+            ],
+        )
+        st.info("Создайте счётчик Яндекс Метрики и привяжите его к сайту.")
+        return
+
+    counter_id = match.get("counter_id")
+    counter = match.get("counter") or {}
+    metrika_url = f"https://metrika.yandex.ru/dashboard?id={counter_id}"
+    visits_report = get_visits_report(access_token, counter_id)
+    goals_result = get_goals(access_token, counter_id)
+    visits_summary = visits_report.get("summary") if visits_report.get("ok") else {}
+    goals = goals_result.get("goals") if goals_result.get("ok") else []
+
+    kv_card(
+        "Яндекс Метрика",
+        [
+            ("Счётчик найден", "Да"),
+            ("counter_id", counter_id or "—"),
+            ("Название", counter.get("name") or "—"),
+            ("Сайт в счётчике", counter.get("site") or "—"),
+            ("Визиты", visits_summary.get("visits", "—")),
+            ("Просмотры", visits_summary.get("pageviews", "—")),
+            ("Отказы", f"{round(float(visits_summary.get('bounce_rate') or 0), 2)}%"),
+            ("Цели", len(goals)),
+        ],
+    )
+    st.link_button("Открыть счётчик в Метрике", metrika_url, use_container_width=True)
+
+    if not visits_report.get("ok"):
+        st.warning(visits_report.get("error") or "API Яндекс Метрики вернул ошибку отчёта.")
+
+    if goals_result.get("ok") and goals:
+        st.markdown("#### Цели")
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "id": goal.get("id"),
+                    "name": goal.get("name"),
+                    "type": goal.get("type"),
+                    "status": goal.get("status"),
+                }
+                for goal in goals
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+    elif goals_result.get("ok"):
+        st.info("Цели в счётчике пока не найдены.")
+    else:
+        st.warning(goals_result.get("error") or "Не удалось получить цели из Яндекс Метрики.")
+
+
 def render_audit_sections(user_id, url, result, score, errors_count, yandex_reviews_url, google_reviews_url, twogis_reviews_url):
     ai_summary = generate_ai_summary(score, errors_count)
 
@@ -1023,6 +1106,7 @@ def render_audit_sections(user_id, url, result, score, errors_count, yandex_revi
         "Meta / Canonical",
         "Ссылки / Редиректы / Отзывы",
         "Яндекс Вебмастер",
+        "Яндекс Метрика",
         "Центр ошибок",
     ]
     selected_section = st.radio(
@@ -1124,6 +1208,10 @@ def render_audit_sections(user_id, url, result, score, errors_count, yandex_revi
         render_yandex_webmaster_section(user_id, url)
 
     elif selected_section == audit_sections[5]:
+        section_header("Яндекс Метрика", "Трафик, отказы и цели из счётчика Метрики для выбранного сайта.")
+        render_yandex_metrika_section(user_id, url)
+
+    elif selected_section == audit_sections[6]:
         section_header("SEO-помощник", "Понятные рекомендации для владельца бизнеса: что случилось, почему это важно и как исправить.")
         render_error_center(result)
 

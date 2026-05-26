@@ -109,12 +109,12 @@ def handle_yandex_oauth_callback():
         )
     except Exception as exc:
         saved = False
-        st.session_state["yandex_oauth_error"] = f"Не удалось подключить Яндекс Вебмастер ({exc.__class__.__name__})."
+        st.session_state["yandex_oauth_error"] = f"Не удалось подключить Яндекс ({exc.__class__.__name__})."
 
     if saved:
-        st.session_state["yandex_oauth_success"] = "Яндекс Вебмастер подключён"
+        st.session_state["yandex_oauth_success"] = "Яндекс подключён"
     elif "yandex_oauth_error" not in st.session_state:
-        st.session_state["yandex_oauth_error"] = "Не удалось сохранить подключение Яндекс Вебмастера."
+        st.session_state["yandex_oauth_error"] = "Не удалось сохранить подключение Яндекса."
 
     clear_query_params()
     st.rerun()
