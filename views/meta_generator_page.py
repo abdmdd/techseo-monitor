@@ -216,7 +216,7 @@ def _build_site_info(site, user_id):
         "id": site[0],
         "name": site[1],
         "url": site[2],
-        "yandex_webmaster_summary": "нет сохранённых данных в AI Hub; используйте сводку Monthly Audit",
+        "yandex_webmaster_summary": "нет сохранённых данных в AI помощнике; используйте сводку Monthly Audit",
         "yandex_metrika_summary": _latest_metrika_snapshot(user_id, site[0]),
     }
 
@@ -359,7 +359,7 @@ def _show_ai_seo_assistant(user_id):
     if not latest_job or not latest_job.get("result"):
         _empty_state(
             "Нет данных Monthly Audit",
-            "Запустите ежемесячный аудит по этому сайту. AI Hub использует последний завершённый результат аудита.",
+            "Запустите ежемесячный аудит по этому сайту. AI помощник использует последний завершённый результат аудита.",
         )
         return
 
@@ -393,20 +393,26 @@ def _show_competitor_analysis(user_id):
     site_labels = [""] + [f"{site[1]} · {site[2]}" for site in sites]
     selected = st.selectbox("Ваш сайт", site_labels, index=0, key="ai_competitor_site")
     own_site = selected.split(" · ", 1)[1] if " · " in selected else selected
-    topic = st.text_input("Тематика / запросы", placeholder="Например: загородный отель Самарская область")
+    if not own_site:
+        own_site = st.text_input("Ваш сайт", placeholder="https://example.ru", key="ai_competitor_manual_site")
+    query = st.text_input("Поисковый запрос", placeholder="Например: загородный отель с бассейном")
+    city = st.text_input("Город", placeholder="Например: Самара")
     competitors = st.text_area(
-        "Конкуренты вручную",
+        "Конкуренты вручную, если уже известны",
         placeholder="https://competitor-1.ru\nhttps://competitor-2.ru\nили список названий сайтов",
         height=160,
     )
 
     if st.button("Сформировать анализ", type="primary", use_container_width=True, key="ai_competitor_button"):
         with st.spinner("Сравниваем конкурентов через YandexGPT..."):
-            st.session_state.ai_competitor_result = generate_competitor_analysis(own_site, topic, competitors)
+            st.session_state.ai_competitor_result = generate_competitor_analysis(own_site, query, city, competitors)
 
     result = st.session_state.get("ai_competitor_result")
     if not result:
-        _empty_state("MVP без SERP-парсера", "Введите конкурентов вручную: AI сравнит их с вашим сайтом и предложит улучшения.")
+        _empty_state(
+            "MVP без настоящего SERP-парсера",
+            "Введите сайт, запрос и город. Если конкурентов не указать вручную, AI сформирует предполагаемый список для первичной SEO-гипотезы.",
+        )
         return
 
     if result.get("ok"):
@@ -414,19 +420,46 @@ def _show_competitor_analysis(user_id):
     else:
         st.warning(result.get("message", "Показана базовая структура анализа."))
 
+    st.info(result.get("mvp_notice", "Это MVP-анализ: настоящий SERP-парсер пока не подключён."))
+
+    _section("Основные конкуренты", "Если список не был введён вручную, это предполагаемые конкуренты для первичного анализа.")
+    competitors_rows = [{"Конкурент": item} for item in result.get("competitors", [])]
+    if competitors_rows:
+        st.dataframe(pd.DataFrame(competitors_rows), use_container_width=True, hide_index=True)
+
     col1, col2 = st.columns(2)
     with col1:
-        _section("Сильные стороны конкурентов")
+        _section("Чем конкуренты сильнее")
         for item in result.get("competitor_strengths", []):
-            _card("Наблюдение", item)
+            _card("Сильная сторона", item)
     with col2:
-        _section("Слабые стороны нашего сайта")
-        for item in result.get("our_weaknesses", []):
-            _card("Риск", item)
+        _section("Почему они могут быть выше")
+        for item in result.get("why_they_rank_higher", []):
+            _card("Причина", item)
 
-    _section("Рекомендации")
-    for item in result.get("recommendations", []):
-        _card("Что улучшить", item)
+    _section("Title / H1 / структура / контент")
+    for item in result.get("title_h1_structure_content", []):
+        _card("Что сравнить", item)
+
+    col3, col4 = st.columns(2)
+    with col3:
+        _card("Геозапросы", result.get("geo_queries"))
+        _card("Коммерческие слова", result.get("commercial_words"))
+    with col4:
+        blocks = result.get("blocks_check") or {}
+        _card("FAQ", blocks.get("faq"))
+        _card("Услуги", blocks.get("services"))
+        _card("Цены", blocks.get("prices"))
+        _card("Контакты", blocks.get("contacts"))
+
+    _section("Что улучшить на нашем сайте")
+    for item in result.get("our_improvements", []):
+        _card("Улучшение", item)
+
+    _section("Конкретный план действий")
+    plan_rows = [{"Шаг": index, "Действие": item} for index, item in enumerate(result.get("action_plan", []), start=1)]
+    if plan_rows:
+        st.dataframe(pd.DataFrame(plan_rows), use_container_width=True, hide_index=True)
     _card("Вывод", result.get("conclusion"))
 
 
@@ -436,18 +469,28 @@ def _show_text_check():
         placeholder="Вставьте текст страницы, описания услуги, новости или SEO-блока...",
         height=220,
     )
-    tone = st.selectbox(
-        "Тон",
-        ["деловой", "дружелюбный", "продающий", "официальный", "SEO-оптимизированный"],
-    )
+    col1, col2 = st.columns(2)
+    with col1:
+        text_type = st.selectbox(
+            "Тип текста",
+            ["письмо", "текст на сайт", "SEO-текст", "пост", "коммерческое предложение"],
+        )
+    with col2:
+        tone = st.selectbox(
+            "Тон",
+            ["деловой", "дружелюбный", "продающий", "официальный", "SEO-оптимизированный"],
+        )
 
     if st.button("Проверить текст", type="primary", use_container_width=True, key="ai_text_check_button"):
         with st.spinner("Проверяем текст через YandexGPT..."):
-            st.session_state.ai_text_check_result = generate_text_check_analysis(source_text, tone)
+            st.session_state.ai_text_check_result = generate_text_check_analysis(source_text, tone, text_type)
 
     result = st.session_state.get("ai_text_check_result")
     if not result:
-        _empty_state("Готово к проверке", "AI найдёт ошибки, объяснит правки и подготовит улучшенную версию под выбранный тон.")
+        _empty_state(
+            "Готово к глубокой проверке",
+            "AI проверит орфографию, пунктуацию, стилистику, повторы, канцеляризмы и SEO-переспам. Ошибки будут подсвечены в тексте.",
+        )
         return
 
     if result.get("ok"):
@@ -455,17 +498,31 @@ def _show_text_check():
     else:
         st.warning(result.get("message", "Показана мягкая fallback-правка."))
 
-    col1, col2 = st.columns(2)
-    with col1:
-        _section("Найденные ошибки")
-        errors = result.get("errors") or ["Явных ошибок не найдено или данных недостаточно."]
-        for item in errors:
-            _card("Ошибка", item)
-    with col2:
-        _section("Объяснение ошибок")
-        explanations = result.get("explanations") or ["AI не вернул отдельных пояснений."]
-        for item in explanations:
-            _card("Пояснение", item)
+    _section("Исходный текст с подсветкой ошибок")
+    st.markdown(
+        f'<div class="ts-copy-block">{result.get("highlighted_text") or escape(source_text)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    _section("Найденные ошибки и объяснения")
+    errors = result.get("errors") or []
+    if errors:
+        rows = [
+            {
+                "Фрагмент": item.get("fragment", ""),
+                "Тип": item.get("type", ""),
+                "Почему это ошибка": item.get("explanation", ""),
+                "Как исправить": item.get("suggestion", ""),
+            }
+            for item in errors
+        ]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        for index, item in enumerate(errors, start=1):
+            with st.expander(f"{index}. {item.get('type', 'ошибка')} · {item.get('fragment') or 'без точного фрагмента'}", expanded=index <= 3):
+                _card("Почему это ошибка", item.get("explanation"))
+                _card("Как исправить", item.get("suggestion"))
+    else:
+        _empty_state("Ошибок не найдено", "AI не нашёл явных ошибок, но всё равно подготовил улучшенный вариант ниже.")
 
     _section("Исправленный вариант")
     _copy_block(result.get("corrected_text"))
@@ -482,7 +539,7 @@ def show_meta_generator_page():
         f"""
         <div class="ts-ai-hub-hero">
             <div>
-                <div class="ts-ai-hub-title">AI Hub</div>
+                <div class="ts-ai-hub-title">AI помощник</div>
                 <div class="ts-ai-hub-subtitle">
                     Единый рабочий центр для AI SEO Assistant, анализа конкурентов и проверки текста.
                     Основной сценарий сейчас — разбор последнего Monthly Audit и генерация понятного плана работ.
@@ -496,8 +553,8 @@ def show_meta_generator_page():
 
     tab_assistant, tab_competitors, tab_text = st.tabs([
         "AI SEO Assistant",
-        "AI Анализ конкурентов",
-        "AI Проверка текста",
+        "Анализ конкурентов",
+        "Проверка текста",
     ])
 
     with tab_assistant:

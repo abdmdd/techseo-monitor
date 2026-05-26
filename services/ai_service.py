@@ -1,4 +1,5 @@
 import json
+from html import escape
 
 import requests
 
@@ -683,16 +684,192 @@ def generate_ai_audit_insight(audit_result, site_info):
     return _normalize_ai_insight(data, fallback)
 
 
-def generate_text_check_analysis(text, tone):
+def _guess_competitors(query, city):
+    clean_query = (query or "услуга").strip()
+    clean_city = (city or "").strip()
+    city_suffix = f" {clean_city}" if clean_city else ""
+    bases = [
+        "лидер рынка",
+        "официальный сайт",
+        "каталог услуг",
+        "рейтинг компаний",
+        "локальный поставщик",
+    ]
+    return [f"{clean_query}{city_suffix} - {base}" for base in bases]
+
+
+def _normalize_competitor_analysis(data, fallback):
+    if not isinstance(data, dict):
+        return fallback
+
+    return {
+        "ok": True,
+        "source": "yandexgpt",
+        "message": data.get("message") or "MVP-анализ конкурентов сформирован через YandexGPT.",
+        "mvp_notice": str(data.get("mvp_notice") or fallback["mvp_notice"]).strip(),
+        "competitors": [str(item).strip() for item in _safe_list(data.get("competitors"), 12) if str(item).strip()] or fallback["competitors"],
+        "competitor_strengths": [str(item).strip() for item in _safe_list(data.get("competitor_strengths"), 16) if str(item).strip()] or fallback["competitor_strengths"],
+        "title_h1_structure_content": [str(item).strip() for item in _safe_list(data.get("title_h1_structure_content"), 16) if str(item).strip()] or fallback["title_h1_structure_content"],
+        "geo_queries": str(data.get("geo_queries") or fallback["geo_queries"]).strip(),
+        "commercial_words": str(data.get("commercial_words") or fallback["commercial_words"]).strip(),
+        "blocks_check": {
+            "faq": str((data.get("blocks_check") or {}).get("faq") or fallback["blocks_check"]["faq"]).strip(),
+            "services": str((data.get("blocks_check") or {}).get("services") or fallback["blocks_check"]["services"]).strip(),
+            "prices": str((data.get("blocks_check") or {}).get("prices") or fallback["blocks_check"]["prices"]).strip(),
+            "contacts": str((data.get("blocks_check") or {}).get("contacts") or fallback["blocks_check"]["contacts"]).strip(),
+        },
+        "why_they_rank_higher": [str(item).strip() for item in _safe_list(data.get("why_they_rank_higher"), 16) if str(item).strip()] or fallback["why_they_rank_higher"],
+        "our_improvements": [str(item).strip() for item in _safe_list(data.get("our_improvements"), 16) if str(item).strip()] or fallback["our_improvements"],
+        "action_plan": [str(item).strip() for item in _safe_list(data.get("action_plan"), 20) if str(item).strip()] or fallback["action_plan"],
+        "conclusion": str(data.get("conclusion") or fallback["conclusion"]).strip(),
+    }
+
+
+def generate_competitor_analysis(own_site, query, city="", competitors=""):
+    clean_site = (own_site or "").strip()
+    clean_query = (query or "").strip()
+    clean_city = (city or "").strip()
+    clean_competitors = (competitors or "").strip()
+    manual_mode = bool(clean_competitors)
+    competitor_list = (
+        [item.strip() for item in clean_competitors.replace(",", "\n").splitlines() if item.strip()]
+        if manual_mode else
+        _guess_competitors(clean_query, clean_city)
+    )
+
+    fallback = {
+        "ok": False,
+        "source": "fallback",
+        "message": "YandexGPT недоступен или вернул неструктурированный ответ. Показан безопасный MVP-анализ.",
+        "mvp_notice": "Это MVP-анализ: настоящий SERP-парсер пока не подключён. Если конкуренты не введены вручную, список является предполагаемым и нужен для первичной SEO-гипотезы.",
+        "competitors": competitor_list,
+        "competitor_strengths": [
+            "Конкуренты могут быть сильнее за счёт более точного соответствия запросу в title и H1.",
+            "У них может быть полнее раскрыт коммерческий интент: услуги, цены, контакты, отзывы, FAQ.",
+            "Локальные страницы с городом в заголовках и тексте обычно лучше отвечают геозапросам.",
+        ],
+        "title_h1_structure_content": [
+            "Проверьте, есть ли точный поисковый запрос и город в title, H1 и первом экране.",
+            "Сравните структуру: услуга, преимущества, цены, кейсы/отзывы, FAQ, контакты.",
+            "Оцените, отвечает ли контент на вопросы пользователя до заявки или звонка.",
+        ],
+        "geo_queries": f"Город: {clean_city or 'не указан'}. Для локальной выдачи стоит использовать город в title, H1, контактах и тексте без переспама.",
+        "commercial_words": "Проверьте наличие коммерческих слов: цена, стоимость, заказать, купить, услуга, консультация, сроки, гарантия.",
+        "blocks_check": {
+            "faq": "FAQ стоит добавить, если пользователи задают уточняющие вопросы перед заявкой.",
+            "services": "Блок услуг должен быть конкретным, с понятными названиями и ссылками на посадочные страницы.",
+            "prices": "Цены или условия расчёта помогают закрыть коммерческий интент.",
+            "contacts": "Контакты, адрес, режим работы и способы связи усиливают локальное доверие.",
+        },
+        "why_they_rank_higher": [
+            "Более точное попадание в интент запроса.",
+            "Лучше раскрыты коммерческие и локальные факторы.",
+            "Страница может быть полнее структурирована и удобнее для пользователя.",
+        ],
+        "our_improvements": [
+            "Уточнить title и H1 под запрос, город и основную услугу.",
+            "Добавить блоки FAQ, услуги, цены/условия, контакты и доказательства доверия.",
+            "Расширить текст ответами на частые вопросы и убрать общие формулировки.",
+        ],
+        "action_plan": [
+            "Собрать 5-10 реальных конкурентов из выдачи и заменить предполагаемый список.",
+            "Сравнить title/H1/структуру каждого конкурента с нашей страницей.",
+            "Обновить title, description, H1 и первый экран под основной запрос.",
+            "Добавить коммерческие блоки: услуги, цены, отзывы, FAQ, контакты.",
+            "Через 2-4 недели проверить позиции, CTR и поведение пользователей.",
+        ],
+        "conclusion": "Начните с интента, геопривязки и коммерческих блоков: это даст самый быстрый прирост качества посадочной страницы.",
+    }
+
+    response = call_yandex_gpt(
+        "Ты SEO-аналитик конкурентов. Верни только валидный JSON без markdown. Пиши подробно и прикладно для SEO-специалиста.",
+        f"""
+Сделай MVP-анализ конкурентов.
+Если конкуренты предполагаемые, явно объясни ограничение: настоящего SERP-парсера пока нет.
+
+Наш сайт: {clean_site or "не указан"}
+Поисковый запрос: {clean_query or "не указан"}
+Город: {clean_city or "не указан"}
+Режим: {"ручные конкуренты" if manual_mode else "предполагаемые конкуренты без SERP-парсера"}
+Конкуренты:
+{json.dumps(competitor_list, ensure_ascii=False)}
+
+Верни JSON:
+{{
+  "mvp_notice": "объяснение ограничения MVP",
+  "competitors": ["список основных конкурентов"],
+  "competitor_strengths": ["чем конкуренты сильнее"],
+  "title_h1_structure_content": ["что у них может быть лучше в title/H1/структуре/контенте"],
+  "geo_queries": "есть ли геозапросы и как их использовать",
+  "commercial_words": "есть ли коммерческие слова и какие нужны",
+  "blocks_check": {{
+    "faq": "есть/нужен ли FAQ",
+    "services": "есть/нужен ли блок услуг",
+    "prices": "есть/нужны ли цены",
+    "contacts": "есть/нужны ли контакты"
+  }},
+  "why_they_rank_higher": ["почему конкуренты могут быть выше"],
+  "our_improvements": ["что улучшить на нашем сайте"],
+  "action_plan": ["конкретный план действий"],
+  "conclusion": "краткий вывод"
+}}
+""",
+        temperature=0.3,
+        max_tokens=3600,
+    )
+
+    if not response["ok"]:
+        fallback["message"] = response["text"]
+        return fallback
+
+    data = _json_or_none(response["text"])
+    return _normalize_competitor_analysis(data, fallback)
+
+
+def _normalize_text_errors(raw_errors):
+    normalized = []
+    for item in _safe_list(raw_errors, 30):
+        if isinstance(item, dict):
+            fragment = str(item.get("fragment") or item.get("text") or item.get("error") or "").strip()
+            normalized.append({
+                "fragment": fragment,
+                "type": str(item.get("type") or "ошибка").strip(),
+                "explanation": str(item.get("explanation") or item.get("why") or "").strip(),
+                "suggestion": str(item.get("suggestion") or item.get("fix") or "").strip(),
+            })
+        else:
+            normalized.append({
+                "fragment": str(item).strip(),
+                "type": "ошибка",
+                "explanation": "",
+                "suggestion": "",
+            })
+    return [item for item in normalized if item["fragment"] or item["explanation"] or item["suggestion"]]
+
+
+def _highlight_text_fragments(text, errors):
+    highlighted = escape(text or "")
+    for item in errors[:20]:
+        fragment = item.get("fragment")
+        if not fragment:
+            continue
+        safe_fragment = escape(fragment)
+        if safe_fragment in highlighted:
+            highlighted = highlighted.replace(safe_fragment, f"<mark>{safe_fragment}</mark>", 1)
+    return highlighted
+
+
+def generate_text_check_analysis(text, tone, text_type="текст на сайт"):
     source_text = (text or "").strip()
     normalized_tone = (tone or "деловой").strip()
+    normalized_type = (text_type or "текст на сайт").strip()
     if not source_text:
         return {
             "ok": False,
             "source": "fallback",
             "message": "Добавьте текст для проверки.",
+            "highlighted_text": "",
             "errors": [],
-            "explanations": [],
             "corrected_text": "",
             "improved_text": "",
         }
@@ -705,21 +882,43 @@ def generate_text_check_analysis(text, tone):
         "ok": False,
         "source": "fallback",
         "message": "YandexGPT недоступен или вернул неструктурированный ответ. Показана мягкая локальная правка.",
-        "errors": [],
-        "explanations": ["Локально исправлены лишние пробелы, первая буква и финальная пунктуация."],
+        "highlighted_text": _highlight_text_fragments(source_text, []),
+        "errors": [{
+            "fragment": "",
+            "type": "локальная проверка",
+            "explanation": "Локально исправлены лишние пробелы, первая буква и финальная пунктуация. Для глубокой проверки нужен доступный YandexGPT.",
+            "suggestion": fallback_text,
+        }],
         "corrected_text": fallback_text,
         "improved_text": fallback_text,
     }
 
     response = call_yandex_gpt(
-        "Ты редактор русского SEO-текста. Верни только валидный JSON без markdown.",
+        "Ты строгий редактор русского текста и SEO-редактор. Верни только валидный JSON без markdown.",
         f"""
-Проверь текст и адаптируй улучшенную версию под тон: {normalized_tone}.
+Проверь текст глубоко. Не просто переписывай: найди и объясни ошибки.
+Тип текста: {normalized_type}
+Тон улучшенной версии: {normalized_tone}
+
+Ищи:
+- орфографию;
+- пунктуацию;
+- стилистику;
+- повторы;
+- канцеляризмы;
+- неясные формулировки;
+- SEO-переспам и неестественное повторение ключевых слов.
 
 Верни JSON:
 {{
-  "errors": ["кратко найденные ошибки"],
-  "explanations": ["пояснения ошибок"],
+  "errors": [
+    {{
+      "fragment": "точный фрагмент из исходного текста",
+      "type": "орфография|пунктуация|стилистика|повтор|канцеляризм|SEO-переспам|ясность",
+      "explanation": "почему это ошибка или риск",
+      "suggestion": "как исправить"
+    }}
+  ],
   "corrected_text": "исправленный вариант без изменения смысла",
   "improved_text": "улучшенный вариант под выбранный тон"
 }}
@@ -739,82 +938,21 @@ def generate_text_check_analysis(text, tone):
     if not isinstance(data, dict):
         return fallback
 
+    errors = _normalize_text_errors(data.get("errors"))
+    if not errors:
+        errors = [{
+            "fragment": "",
+            "type": "глубокая проверка",
+            "explanation": "Критичных ошибок не найдено. Проверьте текст на точность фактов, конкретику, пользу для читателя и отсутствие лишних повторов.",
+            "suggestion": "Усилить конкретику, добавить факты, выгоды и понятный следующий шаг.",
+        }]
+
     return {
         "ok": True,
         "source": "yandexgpt",
         "message": "Текст проверен через YandexGPT.",
-        "errors": [str(item).strip() for item in _safe_list(data.get("errors"), 20) if str(item).strip()],
-        "explanations": [str(item).strip() for item in _safe_list(data.get("explanations"), 20) if str(item).strip()],
+        "highlighted_text": _highlight_text_fragments(source_text, errors),
+        "errors": errors,
         "corrected_text": str(data.get("corrected_text") or fallback["corrected_text"]).strip(),
         "improved_text": str(data.get("improved_text") or fallback["improved_text"]).strip(),
-    }
-
-
-def generate_competitor_analysis(own_site, topic, competitors):
-    clean_site = (own_site or "").strip()
-    clean_topic = (topic or "").strip()
-    clean_competitors = (competitors or "").strip()
-    if not clean_competitors:
-        return {
-            "ok": False,
-            "source": "fallback",
-            "message": "Добавьте конкурентов вручную, чтобы сформировать MVP-анализ.",
-            "competitor_strengths": [],
-            "our_weaknesses": [],
-            "recommendations": [],
-            "conclusion": "",
-        }
-
-    fallback = {
-        "ok": False,
-        "source": "fallback",
-        "message": "YandexGPT недоступен или вернул неструктурированный ответ. Показана базовая структура анализа.",
-        "competitor_strengths": ["Проверьте title, H1, структуру первого экрана и полноту коммерческой информации у каждого конкурента."],
-        "our_weaknesses": ["Сравните посадочные страницы по интенту, структуре, доказательствам доверия и ответам на частые вопросы."],
-        "recommendations": [
-            "Соберите лучшие формулировки title/H1 и адаптируйте их без копирования.",
-            "Усилите структуру страницы блоками: преимущества, цены/условия, FAQ, отзывы, контакты.",
-            "Добавьте контент под реальные запросы пользователя и коммерческие факторы доверия.",
-        ],
-        "conclusion": "SERP-парсер пока не используется, поэтому вывод основан на вручную введённых конкурентах.",
-    }
-
-    response = call_yandex_gpt(
-        "Ты SEO-аналитик конкурентов. Верни только валидный JSON без markdown.",
-        f"""
-Сравни наш сайт с вручную указанными конкурентами.
-
-Наш сайт: {clean_site or "не указан"}
-Тематика / запросы: {clean_topic or "не указаны"}
-Конкуренты:
-{clean_competitors}
-
-Верни JSON:
-{{
-  "competitor_strengths": ["сильные стороны конкурентов"],
-  "our_weaknesses": ["слабые стороны нашего сайта"],
-  "recommendations": ["рекомендации по title/H1/структуре/контенту"],
-  "conclusion": "краткий вывод"
-}}
-""",
-        temperature=0.3,
-        max_tokens=2200,
-    )
-
-    if not response["ok"]:
-        fallback["message"] = response["text"]
-        return fallback
-
-    data = _json_or_none(response["text"])
-    if not isinstance(data, dict):
-        return fallback
-
-    return {
-        "ok": True,
-        "source": "yandexgpt",
-        "message": "Анализ конкурентов сформирован через YandexGPT.",
-        "competitor_strengths": [str(item).strip() for item in _safe_list(data.get("competitor_strengths"), 12) if str(item).strip()],
-        "our_weaknesses": [str(item).strip() for item in _safe_list(data.get("our_weaknesses"), 12) if str(item).strip()],
-        "recommendations": [str(item).strip() for item in _safe_list(data.get("recommendations"), 16) if str(item).strip()],
-        "conclusion": str(data.get("conclusion") or fallback["conclusion"]).strip(),
     }
