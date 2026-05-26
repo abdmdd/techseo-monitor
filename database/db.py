@@ -295,6 +295,26 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS yandex_traffic_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            site_id INTEGER NOT NULL,
+            counter_id TEXT NOT NULL,
+            date_from TEXT NOT NULL,
+            date_to TEXT NOT NULL,
+            visits INTEGER DEFAULT 0,
+            pageviews INTEGER DEFAULT 0,
+            users INTEGER DEFAULT 0,
+            bounce_rate REAL DEFAULT 0,
+            search_visits INTEGER DEFAULT 0,
+            ads_visits INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+        )
+    """)
+
     migrate_sites_unique_url(cursor)
     migrate_yandex_integrations_nullable_site(cursor)
 
@@ -359,6 +379,10 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_yandex_integrations_user_site
         ON yandex_integrations(user_id, site_id)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_yandex_traffic_snapshots_site
+        ON yandex_traffic_snapshots(user_id, site_id, created_at)
     """)
 
     conn.commit()
@@ -819,6 +843,95 @@ def get_site_by_id(site_id, user_id=None):
     row = cursor.fetchone()
     conn.close()
     return row
+
+
+def save_yandex_traffic_snapshot(
+    user_id,
+    site_id,
+    counter_id,
+    date_from,
+    date_to,
+    visits=0,
+    pageviews=0,
+    users=0,
+    bounce_rate=0,
+    search_visits=0,
+    ads_visits=0
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO yandex_traffic_snapshots
+        (
+            user_id,
+            site_id,
+            counter_id,
+            date_from,
+            date_to,
+            visits,
+            pageviews,
+            users,
+            bounce_rate,
+            search_visits,
+            ads_visits
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        user_id,
+        site_id,
+        str(counter_id),
+        date_from,
+        date_to,
+        int(visits or 0),
+        int(pageviews or 0),
+        int(users or 0),
+        float(bounce_rate or 0),
+        int(search_visits or 0),
+        int(ads_visits or 0),
+    ))
+
+    conn.commit()
+    snapshot_id = cursor.lastrowid
+    conn.close()
+    return snapshot_id
+
+
+def get_yandex_traffic_snapshots(user_id, site_id=None, limit=10):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            id,
+            user_id,
+            site_id,
+            counter_id,
+            date_from,
+            date_to,
+            visits,
+            pageviews,
+            users,
+            bounce_rate,
+            search_visits,
+            ads_visits,
+            created_at
+        FROM yandex_traffic_snapshots
+        WHERE user_id = ?
+    """
+    params = [user_id]
+
+    if site_id is not None:
+        query += " AND site_id = ?"
+        params.append(site_id)
+
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(int(limit))
+
+    cursor.execute(query, tuple(params))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
 
 def connect_yandex_webmaster(site_id, token, user_id=None):

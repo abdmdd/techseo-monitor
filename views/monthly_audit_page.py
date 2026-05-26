@@ -1,24 +1,33 @@
 import time
+from datetime import date, timedelta
 from html import escape
 
 import pandas as pd
 import streamlit as st
 
 from components.ui_helpers import metric_card, recommendation_card, warnings_block
+from database.db import get_yandex_traffic_snapshots
 from services.ai_service import generate_ai_recommendations, generate_ai_summary
 from services.audit_service import enqueue_monthly_audit, get_latest_monthly_audit_job
 from services.yandex_oauth_service import get_yandex_access_token, get_yandex_integration_status
 from services.yandex_metrika_service import (
+    collect_yandex_traffic_snapshot,
     find_matching_counter,
+    friendly_metrika_error,
     get_goals,
+    get_traffic_summary,
     get_visits_report,
 )
 from services.yandex_webmaster_service import (
     find_matching_host,
+    friendly_webmaster_error,
+    get_host_diagnostics,
     get_host_summary,
     get_indexing_status,
     get_robots_info,
     get_sitemap_info,
+    get_user_id as get_webmaster_user_id,
+    normalize_domain as normalize_webmaster_domain,
 )
 from views.auth_page import require_user_id
 from views.cached_data import cached_get_sites, clear_cached_data
@@ -942,17 +951,27 @@ def render_webmaster_api_block(title, result):
     if result.get("ok"):
         st.json(result.get("data") or {})
     else:
-        st.warning(result.get("error") or "API Яндекс Вебмастера вернул ошибку.")
+        st.warning(friendly_webmaster_error(result))
+        if result.get("status_code"):
+            st.caption(f"Endpoint status code: {result.get('status_code')}")
 
 
 def render_yandex_webmaster_section(user_id, site_url):
     status = get_yandex_integration_status(user_id)
+    selected_domain = normalize_webmaster_domain(site_url)
 
     if not status["connected"]:
+        kv_card(
+            "Диагностика подключения",
+            [
+                ("Яндекс подключён", "Нет"),
+                ("Домен в TechSEO", selected_domain or site_url),
+            ],
+        )
         st.info("Яндекс Вебмастер не подключён. Подключите общий аккаунт в разделе «Мои сайты».")
         return
 
-    st.success("Яндекс Вебмастер подключён")
+    st.success("Яндекс подключён")
     st.caption(f"Дата подключения: {status.get('connected_at') or '—'}")
 
     access_token, token_error = get_yandex_access_token(user_id)
@@ -963,13 +982,72 @@ def render_yandex_webmaster_section(user_id, site_url):
         st.warning("Не удалось получить активный токен Яндекс Вебмастера.")
         return
 
+    user_result = get_webmaster_user_id(access_token)
+    if user_result.get("status_code") == 401:
+        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+        if token_error or not access_token:
+            st.error("Нужно переподключить Яндекс.")
+            return
+        user_result = get_webmaster_user_id(access_token)
+
+    if not user_result.get("ok"):
+        kv_card(
+            "Диагностика Яндекс Вебмастера",
+            [
+                ("Яндекс подключён", "Да"),
+                ("Получен user-id", "Нет"),
+                ("Endpoint status code", user_result.get("status_code") or "—"),
+                ("Домен в TechSEO", selected_domain or site_url),
+            ],
+        )
+        st.warning(friendly_webmaster_error(user_result))
+        return
+
     match = find_matching_host(access_token, site_url)
+    if match.get("status_code") == 401:
+        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+        if token_error or not access_token:
+            st.error("Нужно переподключить Яндекс.")
+            return
+        match = find_matching_host(access_token, site_url)
+
+    hosts = match.get("hosts") or []
+    host_rows = [
+        {
+            "host_id": host.get("host_id"),
+            "unicode_host_url": host.get("unicode_host_url"),
+            "ascii_host_url": host.get("ascii_host_url"),
+            "host_url": host.get("host_url"),
+        }
+        for host in hosts
+    ]
+
+    kv_card(
+        "Диагностика Яндекс Вебмастера",
+        [
+            ("Яндекс подключён", "Да"),
+            ("Получен user-id", "Да" if user_result.get("user_id") else "Нет"),
+            ("user-id", user_result.get("user_id") or "—"),
+            ("Сайтов вернул API", len(hosts)),
+            ("Домен в TechSEO", selected_domain or site_url),
+            ("Совпадение найдено", "Да" if match.get("found") else "Нет"),
+            ("host_id найденного сайта", match.get("host_id") or "—"),
+            ("Endpoint status code", match.get("status_code") or user_result.get("status_code") or "—"),
+        ],
+    )
+
+    if host_rows:
+        st.markdown("#### Сайты, которые вернул API")
+        st.dataframe(pd.DataFrame(host_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("API Яндекс Вебмастера не вернул сайтов для подключенного аккаунта.")
+
     if not match.get("ok"):
-        st.warning(match.get("error") or "Не удалось получить список сайтов из Яндекс Вебмастера.")
+        st.warning(friendly_webmaster_error(match))
         return
 
     if not match.get("found"):
-        st.warning("Добавьте сайт в Яндекс Вебмастер или проверьте, что домен совпадает.")
+        st.warning("Сайт не найден в Яндекс Вебмастере. Добавьте его в Вебмастер или проверьте совпадение домена.")
         return
 
     host_id = match.get("host_id")
@@ -987,14 +1065,34 @@ def render_yandex_webmaster_section(user_id, site_url):
     if host_id:
         st.link_button("Открыть в Яндекс Вебмастере", webmaster_url, use_container_width=True)
 
-    render_webmaster_api_block("Сводка по сайту", get_host_summary(access_token, host_id))
-    render_webmaster_api_block("Индексация", get_indexing_status(access_token, host_id))
-    render_webmaster_api_block("Sitemap", get_sitemap_info(access_token, host_id))
-    render_webmaster_api_block("Robots", get_robots_info(access_token, host_id))
+    webmaster_user_id = user_result.get("user_id")
+    render_webmaster_api_block("Сводка по сайту", get_host_summary(access_token, host_id, webmaster_user_id))
+    render_webmaster_api_block("Диагностика", get_host_diagnostics(access_token, host_id, webmaster_user_id))
+    render_webmaster_api_block("Индексация", get_indexing_status(access_token, host_id, webmaster_user_id))
+    render_webmaster_api_block("Sitemap", get_sitemap_info(access_token, host_id, webmaster_user_id))
+    render_webmaster_api_block("Robots", get_robots_info(access_token, host_id, webmaster_user_id))
 
 
-def render_yandex_metrika_section(user_id, site_url):
+def _delta_percent(current, previous):
+    current = float(current or 0)
+    previous = float(previous or 0)
+    if previous == 0:
+        return "—" if current == 0 else "+100%"
+    delta = ((current - previous) / previous) * 100
+    return f"{delta:+.1f}%"
+
+
+def _date_value(value):
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def render_yandex_metrika_section(user_id, site_id, site_url):
     status = get_yandex_integration_status(user_id)
+    today = date.today()
+    default_to = today - timedelta(days=1)
+    default_from = default_to - timedelta(days=29)
+    compare_to = default_from - timedelta(days=1)
+    compare_from = compare_to - timedelta(days=29)
 
     if not status["connected"]:
         st.info("Яндекс не подключён. Подключите общий аккаунт в разделе «Мои сайты».")
@@ -1009,46 +1107,123 @@ def render_yandex_metrika_section(user_id, site_url):
         return
 
     match = find_matching_counter(access_token, site_url)
+    if match.get("status_code") == 401:
+        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+        if token_error or not access_token:
+            st.error("Нужно переподключить Яндекс.")
+            return
+        match = find_matching_counter(access_token, site_url)
+
+    counters = match.get("counters") or []
+    kv_card(
+        "Диагностика Метрики",
+        [
+            ("Яндекс подключён", "Да"),
+            ("Домен в TechSEO", match.get("site_domain") or normalize_webmaster_domain(site_url)),
+            ("Счётчиков вернул API", len(counters)),
+            ("Счётчик найден", "Да" if match.get("found") else "Нет"),
+            ("counter_id", match.get("counter_id") or "—"),
+            ("Endpoint status code", match.get("status_code") or "—"),
+        ],
+    )
+
+    if counters:
+        st.markdown("#### Счётчики, которые вернул API")
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "id": counter.get("id"),
+                    "name": counter.get("name"),
+                    "site": counter.get("site"),
+                    "status": counter.get("status"),
+                }
+                for counter in counters
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     if not match.get("ok"):
-        st.warning(match.get("error") or "Не удалось получить список счётчиков Яндекс Метрики.")
+        st.warning(friendly_metrika_error(match))
         return
 
     if not match.get("found"):
-        kv_card(
-            "Яндекс Метрика",
-            [
-                ("Счётчик найден", "Нет"),
-                ("counter_id", "—"),
-            ],
-        )
-        st.info("Создайте счётчик Яндекс Метрики и привяжите его к сайту.")
+        st.info("Счётчик Метрики для этого сайта не найден. Проверьте, что счётчик создан и доступен подключенному Яндекс-аккаунту.")
         return
 
     counter_id = match.get("counter_id")
     counter = match.get("counter") or {}
     metrika_url = f"https://metrika.yandex.ru/dashboard?id={counter_id}"
-    visits_report = get_visits_report(access_token, counter_id)
+    st.markdown("#### Периоды")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        date_from = st.date_input("date_from", value=default_from, key=f"metrika_date_from_{site_id}")
+    with col2:
+        date_to = st.date_input("date_to", value=default_to, key=f"metrika_date_to_{site_id}")
+    with col3:
+        compare_date_from = st.date_input("compare_from", value=compare_from, key=f"metrika_compare_from_{site_id}")
+    with col4:
+        compare_date_to = st.date_input("compare_to", value=compare_to, key=f"metrika_compare_to_{site_id}")
+
+    traffic = get_traffic_summary(access_token, counter_id, _date_value(date_from), _date_value(date_to))
+    if traffic.get("status_code") == 401:
+        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+        if token_error or not access_token:
+            st.error("Нужно переподключить Яндекс.")
+            return
+        traffic = get_traffic_summary(access_token, counter_id, _date_value(date_from), _date_value(date_to))
+
+    compare_traffic = get_traffic_summary(access_token, counter_id, _date_value(compare_date_from), _date_value(compare_date_to))
+    if compare_traffic.get("status_code") == 401:
+        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+        if token_error or not access_token:
+            st.error("Нужно переподключить Яндекс.")
+            return
+        compare_traffic = get_traffic_summary(access_token, counter_id, _date_value(compare_date_from), _date_value(compare_date_to))
+
     goals_result = get_goals(access_token, counter_id)
-    visits_summary = visits_report.get("summary") if visits_report.get("ok") else {}
+    if goals_result.get("status_code") == 401:
+        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+        if token_error or not access_token:
+            st.error("Нужно переподключить Яндекс.")
+            return
+        goals_result = get_goals(access_token, counter_id)
+    visits_summary = traffic.get("summary") if traffic.get("ok") else {}
+    compare_summary = compare_traffic.get("summary") if compare_traffic.get("ok") else {}
     goals = goals_result.get("goals") if goals_result.get("ok") else []
 
+    if not traffic.get("ok"):
+        st.warning(friendly_metrika_error(traffic))
+        return
+    if traffic.get("sources_report") and not traffic["sources_report"].get("ok"):
+        st.warning(f"Источники трафика недоступны: {friendly_metrika_error(traffic['sources_report'])}")
+
     kv_card(
-        "Яндекс Метрика",
+        "Яндекс Метрика / Посещаемость",
         [
             ("Счётчик найден", "Да"),
             ("counter_id", counter_id or "—"),
             ("Название", counter.get("name") or "—"),
             ("Сайт в счётчике", counter.get("site") or "—"),
             ("Визиты", visits_summary.get("visits", "—")),
+            ("Визиты к периоду 2", _delta_percent(visits_summary.get("visits"), compare_summary.get("visits"))),
             ("Просмотры", visits_summary.get("pageviews", "—")),
+            ("Просмотры к периоду 2", _delta_percent(visits_summary.get("pageviews"), compare_summary.get("pageviews"))),
+            ("Пользователи", visits_summary.get("users", "—")),
+            ("Пользователи к периоду 2", _delta_percent(visits_summary.get("users"), compare_summary.get("users"))),
             ("Отказы", f"{round(float(visits_summary.get('bounce_rate') or 0), 2)}%"),
+            ("Отказы к периоду 2", _delta_percent(visits_summary.get("bounce_rate"), compare_summary.get("bounce_rate"))),
+            ("Поисковый трафик", visits_summary.get("search_visits", 0)),
+            ("Поисковый трафик к периоду 2", _delta_percent(visits_summary.get("search_visits"), compare_summary.get("search_visits"))),
+            ("Рекламный трафик", visits_summary.get("ads_visits", 0)),
+            ("Рекламный трафик к периоду 2", _delta_percent(visits_summary.get("ads_visits"), compare_summary.get("ads_visits"))),
             ("Цели", len(goals)),
         ],
     )
     st.link_button("Открыть счётчик в Метрике", metrika_url, use_container_width=True)
 
-    if not visits_report.get("ok"):
-        st.warning(visits_report.get("error") or "API Яндекс Метрики вернул ошибку отчёта.")
+    if compare_traffic and not compare_traffic.get("ok"):
+        st.warning("Сравнение с периодом 2 недоступно: API Метрики вернул ошибку.")
 
     if goals_result.get("ok") and goals:
         st.markdown("#### Цели")
@@ -1070,8 +1245,42 @@ def render_yandex_metrika_section(user_id, site_url):
     else:
         st.warning(goals_result.get("error") or "Не удалось получить цели из Яндекс Метрики.")
 
+    st.markdown("#### Снимки посещаемости")
+    if st.button("Сохранить снимок Метрики за последние 3 дня", key=f"save_metrika_snapshot_{site_id}", use_container_width=True):
+        snapshot = collect_yandex_traffic_snapshot(user_id, site_id)
+        if snapshot.get("ok"):
+            st.success("Снимок Метрики сохранён.")
+        elif snapshot.get("error") == "reconnect_required":
+            st.error("Нужно переподключить Яндекс.")
+        else:
+            st.warning("Не удалось сохранить снимок Метрики.")
 
-def render_audit_sections(user_id, url, result, score, errors_count, yandex_reviews_url, google_reviews_url, twogis_reviews_url):
+    snapshots = get_yandex_traffic_snapshots(user_id, site_id=site_id, limit=10)
+    if snapshots:
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "created_at": row[12],
+                    "counter_id": row[3],
+                    "date_from": row[4],
+                    "date_to": row[5],
+                    "visits": row[6],
+                    "pageviews": row[7],
+                    "users": row[8],
+                    "bounce_rate": row[9],
+                    "search_visits": row[10],
+                    "ads_visits": row[11],
+                }
+                for row in snapshots
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("Снимков Метрики пока нет. Их можно сохранять вручную сейчас и позже запускать эту же функцию по Celery schedule раз в 3 дня.")
+
+
+def render_audit_sections(user_id, site_id, url, result, score, errors_count, yandex_reviews_url, google_reviews_url, twogis_reviews_url):
     ai_summary = generate_ai_summary(score, errors_count)
 
     section_header("Сводка аудита", "Короткое объяснение результата и рекомендации по текущему аудиту.")
@@ -1106,7 +1315,7 @@ def render_audit_sections(user_id, url, result, score, errors_count, yandex_revi
         "Meta / Canonical",
         "Ссылки / Редиректы / Отзывы",
         "Яндекс Вебмастер",
-        "Яндекс Метрика",
+        "Яндекс Метрика / Посещаемость",
         "Центр ошибок",
     ]
     selected_section = st.radio(
@@ -1209,7 +1418,7 @@ def render_audit_sections(user_id, url, result, score, errors_count, yandex_revi
 
     elif selected_section == audit_sections[5]:
         section_header("Яндекс Метрика", "Трафик, отказы и цели из счётчика Метрики для выбранного сайта.")
-        render_yandex_metrika_section(user_id, url)
+        render_yandex_metrika_section(user_id, site_id, url)
 
     elif selected_section == audit_sections[6]:
         section_header("SEO-помощник", "Понятные рекомендации для владельца бизнеса: что случилось, почему это важно и как исправить.")
@@ -1351,6 +1560,7 @@ def show_monthly_audit_page():
 
     render_audit_sections(
         user_id=user_id,
+        site_id=site_id,
         url=url,
         result=result,
         score=audit_data["score"],

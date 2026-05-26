@@ -277,7 +277,7 @@ def get_yandex_integration_status(user_id, site_id=None):
     }
 
 
-def get_yandex_access_token(user_id):
+def get_yandex_access_token(user_id, force_refresh=False):
     row = _get_account_integration_row(user_id)
 
     if not row or row[1] != "connected":
@@ -285,7 +285,7 @@ def get_yandex_access_token(user_id):
 
     integration_id, _, _, expires_at, access_token, refresh_token = row
 
-    if access_token and not _token_expired(expires_at):
+    if access_token and not force_refresh and not _token_expired(expires_at):
         return access_token, None
 
     if not refresh_token:

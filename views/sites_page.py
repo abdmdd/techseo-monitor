@@ -11,8 +11,8 @@ from services.yandex_oauth_service import (
     get_yandex_access_token,
     get_yandex_integration_status,
 )
-from services.yandex_metrika_service import find_matching_counter
-from services.yandex_webmaster_service import find_matching_host
+from services.yandex_metrika_service import find_matching_counter, friendly_metrika_error
+from services.yandex_webmaster_service import find_matching_host, friendly_webmaster_error
 from views.auth_page import require_user_id
 from views.cached_data import cached_get_audit_history, cached_get_sites, clear_cached_data
 
@@ -164,12 +164,25 @@ def render_yandex_site_matches(user_id, sites):
         site_name = site[1]
         site_url = site[2]
         webmaster_match = find_matching_host(access_token, site_url)
+        if webmaster_match.get("status_code") == 401:
+            access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+            if token_error or not access_token:
+                st.error("Нужно переподключить Яндекс.")
+                return
+            webmaster_match = find_matching_host(access_token, site_url)
+
         metrika_match = find_matching_counter(access_token, site_url)
+        if metrika_match.get("status_code") == 401:
+            access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+            if token_error or not access_token:
+                st.error("Нужно переподключить Яндекс.")
+                return
+            metrika_match = find_matching_counter(access_token, site_url)
 
         webmaster_found = webmaster_match.get("ok") and webmaster_match.get("found")
         metrika_found = metrika_match.get("ok") and metrika_match.get("found")
-        webmaster_label = "подключён" if webmaster_found else "не найден сайт"
-        metrika_label = "найден счётчик" if metrika_found else "не найден счётчик"
+        webmaster_label = "подключён" if webmaster_found else ("не найден сайт" if webmaster_match.get("ok") else "нет доступа")
+        metrika_label = "найден счётчик" if metrika_found else ("не найден счётчик" if metrika_match.get("ok") else "нет доступа")
 
         kv_card(
             site_name,
@@ -191,6 +204,8 @@ def render_yandex_site_matches(user_id, sites):
                     f"https://webmaster.yandex.ru/site/dashboard/?host={host_id}",
                     use_container_width=True,
                 )
+            elif not webmaster_match.get("ok"):
+                st.warning(friendly_webmaster_error(webmaster_match))
         with cols[1]:
             if counter_id:
                 st.link_button(
@@ -198,6 +213,8 @@ def render_yandex_site_matches(user_id, sites):
                     f"https://metrika.yandex.ru/dashboard?id={counter_id}",
                     use_container_width=True,
                 )
+            elif not metrika_match.get("ok"):
+                st.warning(friendly_metrika_error(metrika_match))
             elif metrika_match.get("ok"):
                 st.info("Создайте счётчик Яндекс Метрики и привяжите его к сайту.")
 
