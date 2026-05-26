@@ -285,6 +285,42 @@ def get_traffic_summary(access_token, counter_id, date_from="30daysAgo", date_to
     }
 
 
+def get_search_traffic_anomaly(access_token, counter_id):
+    yesterday_report = get_traffic_sources_report(access_token, counter_id, "yesterday", "yesterday")
+    baseline_report = get_traffic_sources_report(access_token, counter_id, "29daysAgo", "2daysAgo")
+
+    if not yesterday_report.get("ok"):
+        return yesterday_report
+    if not baseline_report.get("ok"):
+        return baseline_report
+
+    yesterday_value = float((yesterday_report.get("summary") or {}).get("search_visits") or 0)
+    baseline_total = float((baseline_report.get("summary") or {}).get("search_visits") or 0)
+    baseline_average = baseline_total / 28 if baseline_total else 0
+
+    if baseline_average <= 0:
+        return {
+            "ok": True,
+            "has_enough_data": False,
+            "anomaly": False,
+            "yesterday_value": yesterday_value,
+            "baseline_average": baseline_average,
+            "deviation_percent": 0,
+            "error": None,
+        }
+
+    deviation_percent = ((yesterday_value - baseline_average) / baseline_average) * 100
+    return {
+        "ok": True,
+        "has_enough_data": True,
+        "anomaly": abs(deviation_percent) > 20,
+        "yesterday_value": round(yesterday_value, 2),
+        "baseline_average": round(baseline_average, 2),
+        "deviation_percent": round(deviation_percent, 1),
+        "error": None,
+    }
+
+
 def friendly_metrika_error(result):
     status_code = (result or {}).get("status_code")
     if status_code == 403:

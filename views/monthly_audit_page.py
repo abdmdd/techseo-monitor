@@ -5,7 +5,7 @@ from html import escape
 import pandas as pd
 import streamlit as st
 
-from components.ui_helpers import metric_card, recommendation_card, warnings_block
+from components.ui_helpers import metric_card, recommendation_card
 from database.db import get_yandex_traffic_snapshots
 from services.ai_service import generate_ai_recommendations, generate_ai_summary
 from services.audit_service import enqueue_monthly_audit, get_latest_monthly_audit_job
@@ -15,8 +15,8 @@ from services.yandex_metrika_service import (
     find_matching_counter,
     friendly_metrika_error,
     get_goals,
+    get_search_traffic_anomaly,
     get_traffic_summary,
-    get_visits_report,
 )
 from services.yandex_webmaster_service import (
     find_matching_host,
@@ -102,6 +102,39 @@ def kv_card(title, rows):
         """,
         unsafe_allow_html=True
     )
+
+
+def percent_change(current, previous):
+    current = float(current or 0)
+    previous = float(previous or 0)
+    if previous == 0:
+        return None
+    return ((current - previous) / previous) * 100
+
+
+def format_percent_change(current, previous):
+    value = percent_change(current, previous)
+    if value is None:
+        return "—"
+    return f"{value:+.1f}%"
+
+
+def first_value(data, keys, default="—"):
+    if isinstance(data, dict):
+        for key in keys:
+            value = data.get(key)
+            if value not in (None, ""):
+                return value
+        for value in data.values():
+            nested = first_value(value, keys, None)
+            if nested not in (None, ""):
+                return nested
+    elif isinstance(data, list):
+        for item in data:
+            nested = first_value(item, keys, None)
+            if nested not in (None, ""):
+                return nested
+    return default
 
 
 def empty_state(title, text):
@@ -503,8 +536,11 @@ def render_sitemap_pro(result):
     if sitemap_url:
         st.link_button("Открыть sitemap.xml", sitemap_url, use_container_width=True)
 
-    for check in analysis.get("checks", []):
-        render_technical_check_card(check)
+    checks = analysis.get("checks", [])
+    if checks:
+        with st.expander(f"Рекомендации по sitemap: {len(checks)}", expanded=False):
+            for check in checks:
+                render_technical_check_card(check)
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -526,19 +562,20 @@ def render_sitemap_pro(result):
         )
 
     if broken_urls:
-        st.dataframe(
-            pd.DataFrame([
-                {
-                    "URL": item.get("url", ""),
-                    "Status": item.get("status_code", ""),
-                    "Found on": item.get("found_on", ""),
-                }
-                for item in broken_urls
-            ]),
-            width="stretch",
-            hide_index=True,
-            height=220
-        )
+        with st.expander(f"Проблемные URL в sitemap: {len(broken_urls)}", expanded=False):
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "URL": item.get("url", ""),
+                        "Status": item.get("status_code", ""),
+                        "Found on": item.get("found_on", ""),
+                    }
+                    for item in broken_urls
+                ]),
+                width="stretch",
+                hide_index=True,
+                height=220
+            )
 
 
 def render_robots_pro(result):
@@ -559,18 +596,21 @@ def render_robots_pro(result):
     if robots_url:
         st.link_button("Открыть robots.txt", robots_url, use_container_width=True)
 
-    for check in analysis.get("checks", []):
-        render_technical_check_card(check)
+    checks = analysis.get("checks", [])
+    if checks:
+        with st.expander(f"Рекомендации по robots.txt: {len(checks)}", expanded=False):
+            for check in checks:
+                render_technical_check_card(check)
 
     if blocked_sections:
         st.warning("Найдены правила, которые могут закрывать важные разделы: " + ", ".join(blocked_sections))
 
-    st.markdown('<div class="ts-section-subtitle">Содержимое robots.txt</div>', unsafe_allow_html=True)
     content = analysis.get("content") or result.get("robots_content") or "robots.txt не найден или пустой"
-    st.markdown(
-        f'<div class="ts-technical-content">{escape(content)}</div>',
-        unsafe_allow_html=True
-    )
+    with st.expander("Содержимое robots.txt", expanded=False):
+        st.markdown(
+            f'<div class="ts-technical-content">{escape(content)}</div>',
+            unsafe_allow_html=True
+        )
 
 
 def meta_table(result, url):
@@ -689,9 +729,10 @@ def meta_table(result, url):
             "Проблемы": ", ".join(issue_titles) if issue_titles else "Без проблем",
         })
 
-    st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True, height=320)
+    with st.expander(f"Таблица meta-тегов: {len(table_rows)} страниц", expanded=False):
+        st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True, height=320)
 
-    st.markdown('<div class="ts-section-subtitle">Карточки страниц с подсветкой проблем</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ts-section-subtitle">Карточки страниц с подсветкой проблем скрыты ниже</div>', unsafe_allow_html=True)
 
     for index, row in enumerate(filtered_rows[:20]):
         issues = row.get("issues") or []
@@ -772,7 +813,8 @@ def canonical_table(result):
         }
         for row in rows
     ]
-    st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True, height=260)
+    with st.expander(f"Таблица canonical: {len(table_rows)} страниц", expanded=False):
+        st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True, height=260)
 
     for index, row in enumerate(rows[:20]):
         issues = row.get("issues") or []
@@ -838,7 +880,8 @@ def broken_links_table(result):
         }
         for item in broken_links
     ]
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, height=260)
+    with st.expander(f"Список битых ссылок: {len(rows)}", expanded=False):
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, height=260)
 
 
 def render_redirect_chains(result):
@@ -873,7 +916,8 @@ def render_redirect_chains(result):
         }
         for row in rows
     ]
-    st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True, height=260)
+    with st.expander(f"Таблица редиректов: {len(table_rows)}", expanded=False):
+        st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True, height=260)
 
     for row in rows[:20]:
         issues = row.get("issues") or []
@@ -949,11 +993,9 @@ def reviews_sources(yandex_reviews_url, google_reviews_url, twogis_reviews_url):
 def render_webmaster_api_block(title, result):
     st.markdown(f"#### {title}")
     if result.get("ok"):
-        st.json(result.get("data") or {})
+        st.success("Данные доступны.")
     else:
         st.warning(friendly_webmaster_error(result))
-        if result.get("status_code"):
-            st.caption(f"Endpoint status code: {result.get('status_code')}")
 
 
 def render_yandex_webmaster_section(user_id, site_url):
@@ -1084,6 +1126,13 @@ def _delta_percent(current, previous):
 
 def _date_value(value):
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _same_day_previous_year(value):
+    try:
+        return date(value.year - 1, value.month, value.day)
+    except ValueError:
+        return date(value.year - 1, value.month, 28)
 
 
 def render_yandex_metrika_section(user_id, site_id, site_url):
@@ -1280,6 +1329,222 @@ def render_yandex_metrika_section(user_id, site_id, site_url):
         st.info("Снимков Метрики пока нет. Их можно сохранять вручную сейчас и позже запускать эту же функцию по Celery schedule раз в 3 дня.")
 
 
+def render_yandex_webmaster_summary_section(user_id, site_url):
+    status = get_yandex_integration_status(user_id)
+
+    if not status["connected"]:
+        st.info("Яндекс не подключён. Подключите общий аккаунт в разделе «Мои сайты».")
+        return
+
+    access_token, token_error = get_yandex_access_token(user_id)
+    if token_error == "reconnect_required":
+        st.error("Нужно переподключить Яндекс.")
+        return
+    if token_error or not access_token:
+        st.warning("Не удалось получить активный токен Яндекса.")
+        return
+
+    match = find_matching_host(access_token, site_url)
+    if match.get("status_code") == 401:
+        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+        if token_error or not access_token:
+            st.error("Нужно переподключить Яндекс.")
+            return
+        match = find_matching_host(access_token, site_url)
+
+    if not match.get("ok"):
+        st.warning(friendly_webmaster_error(match))
+        return
+    if not match.get("found"):
+        st.info("Сайт не найден в Яндекс Вебмастере. Добавьте его в Вебмастер или проверьте совпадение домена.")
+        return
+
+    host_id = match.get("host_id")
+    webmaster_user_id = match.get("user_id")
+    summary_result = get_host_summary(access_token, host_id, webmaster_user_id)
+    diagnostics_result = get_host_diagnostics(access_token, host_id, webmaster_user_id)
+    indexing_result = get_indexing_status(access_token, host_id, webmaster_user_id)
+
+    summary_data = summary_result.get("data") if summary_result.get("ok") else {}
+    diagnostics_data = diagnostics_result.get("data") if diagnostics_result.get("ok") else {}
+    indexing_data = indexing_result.get("data") if indexing_result.get("ok") else {}
+    issues = first_value(
+        diagnostics_data,
+        ["problems", "diagnostics", "items", "host_problems", "site_problems"],
+        [],
+    )
+    if isinstance(issues, dict):
+        issues = list(issues.values())
+    if not isinstance(issues, list):
+        issues = []
+
+    loaded_pages = first_value(summary_data, ["downloaded_pages_count", "loaded_pages", "downloaded_pages", "pages_loaded"])
+    indexed_pages = first_value(summary_data, ["indexed_pages_count", "searchable_pages_count", "pages_in_search", "indexed_pages"])
+    excluded_pages = first_value(summary_data, ["excluded_pages_count", "excluded_pages", "not_indexed_pages_count"])
+    if indexed_pages == "—":
+        indexed_pages = first_value(indexing_data, ["indexed_pages_count", "searchable_pages_count", "pages_in_search"], "—")
+    if excluded_pages == "—":
+        excluded_pages = first_value(indexing_data, ["excluded_pages_count", "excluded_pages"], "—")
+
+    kv_card(
+        "Сводка Яндекс Вебмастера",
+        [
+            ("ИКС", first_value(summary_data, ["sqi", "tic", "iks", "site_quality_index"])),
+            ("Страниц загружено", loaded_pages),
+            ("Страниц в поиске", indexed_pages),
+            ("Исключено страниц", excluded_pages),
+            ("Проблемы сайта", len(issues)),
+            ("Рекомендации", "Проверьте найденные проблемы в Вебмастере" if issues else "Критичных проблем из доступных данных не найдено"),
+        ],
+    )
+
+    if host_id:
+        st.link_button(
+            "Открыть Яндекс Вебмастер",
+            f"https://webmaster.yandex.ru/site/dashboard/?host={host_id}",
+            use_container_width=True,
+        )
+
+    if not summary_result.get("ok") or not diagnostics_result.get("ok") or not indexing_result.get("ok"):
+        st.info("Часть данных Вебмастера недоступна. Проверьте права OAuth-приложения и подтверждение сайта в подключенном Яндекс-аккаунте.")
+
+
+def _traffic_table(current, previous):
+    metrics = [
+        ("Визиты", "visits"),
+        ("Просмотры", "pageviews"),
+        ("Пользователи", "users"),
+        ("Отказы", "bounce_rate"),
+        ("Поисковый трафик", "search_visits"),
+        ("Рекламный трафик", "ads_visits"),
+    ]
+    rows = []
+    for label, key in metrics:
+        current_value = (current or {}).get(key, 0)
+        previous_value = (previous or {}).get(key, 0)
+        rows.append({
+            "Метрика": label,
+            "Период": round(float(current_value or 0), 2),
+            "Период сравнения": round(float(previous_value or 0), 2),
+            "Изменение": format_percent_change(current_value, previous_value),
+        })
+    return rows
+
+
+def render_yandex_metrika_traffic_section(user_id, site_id, site_url):
+    status = get_yandex_integration_status(user_id)
+    today = date.today()
+    default_to = today - timedelta(days=1)
+    default_from = default_to - timedelta(days=29)
+    default_compare_to = default_from - timedelta(days=1)
+    default_compare_from = default_compare_to - timedelta(days=29)
+
+    if not status["connected"]:
+        st.info("Яндекс не подключён. Подключите общий аккаунт в разделе «Мои сайты».")
+        return
+
+    access_token, token_error = get_yandex_access_token(user_id)
+    if token_error == "reconnect_required":
+        st.error("Нужно переподключить Яндекс.")
+        return
+    if token_error or not access_token:
+        st.warning("Не удалось получить активный токен Яндекса.")
+        return
+
+    match = find_matching_counter(access_token, site_url)
+    if match.get("status_code") == 401:
+        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+        if token_error or not access_token:
+            st.error("Нужно переподключить Яндекс.")
+            return
+        match = find_matching_counter(access_token, site_url)
+
+    if not match.get("ok"):
+        st.warning(friendly_metrika_error(match))
+        return
+    if not match.get("found"):
+        st.info("Счётчик Метрики для этого сайта не найден. Проверьте, что счётчик создан и доступен подключенному Яндекс-аккаунту.")
+        return
+
+    counter_id = match.get("counter_id")
+    st.markdown("#### Посещаемость")
+    same_period_last_year = st.checkbox(
+        "Сравнить с тем же периодом прошлого года",
+        value=False,
+        key=f"metrika_compare_last_year_{site_id}",
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        date_from = st.date_input("Период: с", value=default_from, key=f"traffic_date_from_{site_id}")
+    with col2:
+        date_to = st.date_input("Период: по", value=default_to, key=f"traffic_date_to_{site_id}")
+
+    if same_period_last_year:
+        compare_date_from = _same_day_previous_year(date_from)
+        compare_date_to = _same_day_previous_year(date_to)
+        with col3:
+            st.date_input("Сравнение: с", value=compare_date_from, key=f"traffic_compare_from_locked_{site_id}", disabled=True)
+        with col4:
+            st.date_input("Сравнение: по", value=compare_date_to, key=f"traffic_compare_to_locked_{site_id}", disabled=True)
+    else:
+        with col3:
+            compare_date_from = st.date_input("Сравнение: с", value=default_compare_from, key=f"traffic_compare_from_{site_id}")
+        with col4:
+            compare_date_to = st.date_input("Сравнение: по", value=default_compare_to, key=f"traffic_compare_to_{site_id}")
+
+    traffic = get_traffic_summary(access_token, counter_id, _date_value(date_from), _date_value(date_to))
+    if traffic.get("status_code") == 401:
+        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+        if token_error or not access_token:
+            st.error("Нужно переподключить Яндекс.")
+            return
+        traffic = get_traffic_summary(access_token, counter_id, _date_value(date_from), _date_value(date_to))
+
+    compare_traffic = get_traffic_summary(access_token, counter_id, _date_value(compare_date_from), _date_value(compare_date_to))
+    if compare_traffic.get("status_code") == 401:
+        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+        if token_error or not access_token:
+            st.error("Нужно переподключить Яндекс.")
+            return
+        compare_traffic = get_traffic_summary(access_token, counter_id, _date_value(compare_date_from), _date_value(compare_date_to))
+
+    if not traffic.get("ok"):
+        st.warning(friendly_metrika_error(traffic))
+        return
+
+    current_summary = traffic.get("summary") or {}
+    compare_summary = compare_traffic.get("summary") if compare_traffic.get("ok") else {}
+    has_data = any(float(current_summary.get(key) or 0) > 0 for key in ("visits", "pageviews", "users", "search_visits", "ads_visits"))
+    if not has_data:
+        st.info("Недостаточно данных для анализа посещаемости.")
+        return
+
+    st.dataframe(
+        pd.DataFrame(_traffic_table(current_summary, compare_summary)),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    anomaly = get_search_traffic_anomaly(access_token, counter_id)
+    if anomaly.get("ok") and anomaly.get("anomaly"):
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        st.warning(
+            "На сайте обнаружено аномальное отклонение посещаемости (более 20%) из поисковых сетей от средних значений.\n\n"
+            f"Значение за вчера ({yesterday}): {anomaly.get('yesterday_value')}\n"
+            f"Среднее значение за последние 4 недели: {anomaly.get('baseline_average')}\n"
+            f"Отклонение: {anomaly.get('deviation_percent')}%"
+        )
+    elif anomaly.get("ok") and not anomaly.get("has_enough_data", True):
+        st.info("Недостаточно данных для анализа посещаемости.")
+
+    st.link_button(
+        "Открыть счётчик в Метрике",
+        f"https://metrika.yandex.ru/dashboard?id={counter_id}",
+        use_container_width=True,
+    )
+
+
 def render_audit_sections(user_id, site_id, url, result, score, errors_count, yandex_reviews_url, google_reviews_url, twogis_reviews_url):
     ai_summary = generate_ai_summary(score, errors_count)
 
@@ -1287,12 +1552,11 @@ def render_audit_sections(user_id, site_id, url, result, score, errors_count, ya
     col1, col2 = st.columns(2)
 
     with col1:
-        metric_card("Ошибок", errors_count, "Найдено crawler", "#dc2626")
+        metric_card("Ошибок", errors_count, "Найдено аудитом", "#dc2626")
     with col2:
         metric_card("Статус", ai_summary["risk"], "Итоговая оценка", "#f59e0b")
 
     st.info(ai_summary["summary"])
-    warnings_block(result.get("crawler_warnings", []))
 
     recommendations_key = f"monthly_ai_recommendations_{url}_{score}_{errors_count}"
     recommendations = st.session_state.get(recommendations_key)
@@ -1377,20 +1641,24 @@ def render_audit_sections(user_id, site_id, url, result, score, errors_count, ya
 
     elif selected_section == audit_sections[1]:
         section_header("Sitemap.xml PRO", "Проверяем, доступна ли карта сайта, корректен ли XML и нет ли в ней проблемных URL.")
-        render_sitemap_pro(result)
+        with st.expander("Подробности sitemap", expanded=False):
+            render_sitemap_pro(result)
 
         section_header("Robots.txt PRO", "Проверяем правила обхода сайта: User-agent, Sitemap directive, полную блокировку и важные закрытые разделы.")
-        render_robots_pro(result)
+        with st.expander("Подробности robots.txt", expanded=False):
+            render_robots_pro(result)
 
     elif selected_section == audit_sections[2]:
         section_header("SEO Meta Audit PRO", "Полная проверка Title, Description и H1 по каждой странице: длина, дубли, отсутствие и понятные рекомендации.")
-        meta_table(result, url)
+        with st.expander("Подробности meta-тегов", expanded=False):
+            meta_table(result, url)
 
         col_a, col_b = st.columns(2)
 
         with col_a:
             section_header("Canonical Analyzer PRO", "Проверяем self canonical, canonical на другой URL, главную, внешний домен, петли и недоступные цели.")
-            canonical_table(result)
+            with st.expander("Подробности canonical", expanded=False):
+                canonical_table(result)
 
         with col_b:
             kv_card(
@@ -1404,21 +1672,23 @@ def render_audit_sections(user_id, site_id, url, result, score, errors_count, ya
 
     elif selected_section == audit_sections[3]:
         section_header("Broken Links", "Таблица URL, HTTP status и страница-источник.")
-        broken_links_table(result)
+        with st.expander("Подробности по ссылкам", expanded=False):
+            broken_links_table(result)
 
         section_header("Redirect Analyzer PRO", "Проверяем source, destination, тип редиректа, длину цепочки, петли, временные и смешанные редиректы.")
-        render_redirect_chains(result)
+        with st.expander("Подробности редиректов", expanded=False):
+            render_redirect_chains(result)
 
         section_header("Reviews", "Подготовка к review monitoring без изменения crawler logic.")
         reviews_sources(yandex_reviews_url, google_reviews_url, twogis_reviews_url)
 
     elif selected_section == audit_sections[4]:
         section_header("Яндекс Вебмастер", "Данные из общего аккаунта Яндекс Вебмастера для выбранного сайта.")
-        render_yandex_webmaster_section(user_id, url)
+        render_yandex_webmaster_summary_section(user_id, url)
 
     elif selected_section == audit_sections[5]:
         section_header("Яндекс Метрика", "Трафик, отказы и цели из счётчика Метрики для выбранного сайта.")
-        render_yandex_metrika_section(user_id, site_id, url)
+        render_yandex_metrika_traffic_section(user_id, site_id, url)
 
     elif selected_section == audit_sections[6]:
         section_header("SEO-помощник", "Понятные рекомендации для владельца бизнеса: что случилось, почему это важно и как исправить.")
