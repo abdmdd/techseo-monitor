@@ -401,6 +401,20 @@ def init_db():
     """)
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_telegram_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            period TEXT NOT NULL DEFAULT 'daily',
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_by TEXT NOT NULL DEFAULT 'scheduled',
+            requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            sent_at TEXT,
+            error_message TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS ai_audit_insights (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -561,6 +575,15 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_telegram_integrations_user
         ON telegram_integrations(user_id, status)
+    """)
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_telegram_summaries_unique_pending
+        ON pending_telegram_summaries(user_id, period)
+        WHERE status = 'pending'
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pending_telegram_summaries_status
+        ON pending_telegram_summaries(status, user_id)
     """)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_ai_audit_insights_latest
@@ -1336,6 +1359,136 @@ def disconnect_telegram(user_id):
     affected = cursor.rowcount
     conn.close()
     return affected > 0
+
+
+def _pending_telegram_summary_row_to_dict(row):
+    if not row:
+        return None
+
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "period": row[2],
+        "status": row[3],
+        "created_by": row[4],
+        "requested_at": row[5],
+        "sent_at": row[6],
+        "error_message": row[7],
+    }
+
+
+def create_pending_telegram_summary(user_id, period, created_by):
+    normalized_period = period if period in ("daily", "weekly", "monthly") else "daily"
+    normalized_created_by = created_by if created_by in ("test", "scheduled") else "scheduled"
+    for summary in get_pending_telegram_summaries(user_id=user_id):
+        if summary.get("period") == normalized_period:
+            return summary
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO pending_telegram_summaries
+            (
+                user_id,
+                period,
+                status,
+                created_by,
+                requested_at
+            )
+            VALUES (?, ?, 'pending', ?, CURRENT_TIMESTAMP)
+        """, (
+            user_id,
+            normalized_period,
+            normalized_created_by,
+        ))
+    except sqlite3.IntegrityError:
+        pass
+    conn.commit()
+    conn.close()
+
+    for summary in get_pending_telegram_summaries(user_id=user_id):
+        if summary.get("period") == normalized_period:
+            return summary
+    return None
+
+
+def get_pending_telegram_summaries(user_id=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    query = """
+        SELECT
+            id,
+            user_id,
+            period,
+            status,
+            created_by,
+            requested_at,
+            sent_at,
+            error_message
+        FROM pending_telegram_summaries
+        WHERE status = 'pending'
+    """
+    params = []
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+    query += " ORDER BY id ASC"
+    cursor.execute(query, tuple(params))
+    rows = cursor.fetchall()
+    conn.close()
+    return [_pending_telegram_summary_row_to_dict(row) for row in rows]
+
+
+def mark_pending_telegram_summary_sent(summary_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE pending_telegram_summaries
+        SET
+            status = 'sent',
+            sent_at = CURRENT_TIMESTAMP,
+            error_message = NULL
+        WHERE id = ?
+    """, (summary_id,))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
+
+def mark_pending_telegram_summary_failed(summary_id, error_message):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE pending_telegram_summaries
+        SET
+            status = 'failed',
+            sent_at = CURRENT_TIMESTAMP,
+            error_message = ?
+        WHERE id = ?
+    """, (str(error_message or ""), summary_id))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
+
+def has_pending_telegram_summary(user_id, period):
+    normalized_period = period if period in ("daily", "weekly", "monthly") else "daily"
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 1
+        FROM pending_telegram_summaries
+        WHERE user_id = ?
+            AND period = ?
+            AND status = 'pending'
+        LIMIT 1
+    """, (user_id, normalized_period))
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row)
 
 
 def save_ai_audit_insight(user_id, site_id, audit_id, summary_json):

@@ -13,10 +13,9 @@ from database.db import (
     mark_seo_monitoring_sent,
     upsert_seo_monitoring_settings,
 )
-from services.summary_service import send_telegram_summary
+from services.summary_service import request_test_telegram_summary
 from services.telegram_service import (
     generate_telegram_connect_token,
-    send_admin_copy,
     sync_telegram_updates,
 )
 from services.yandex_oauth_service import (
@@ -328,10 +327,8 @@ def automatic_monitoring_block(user_id):
     with col2:
         if st.button("Отправить тестовую сводку", disabled=not telegram_connected, use_container_width=True):
             with st.spinner("Собираем SEO-сводку по всем проектам..."):
-                result = send_telegram_summary(user_id, period=frequency, force_refresh=True)
-                message = result.get("text") or result.get("message")
-                send_admin_copy(message, user_id=user_id)
-            if result.get("success"):
+                result = request_test_telegram_summary(user_id, period="daily")
+            if result.get("status") == "sent":
                 now_value = datetime.utcnow().isoformat(timespec="seconds")
                 current_settings = get_seo_monitoring_settings(user_id)
                 if not current_settings.get("id"):
@@ -347,6 +344,10 @@ def automatic_monitoring_block(user_id):
                     _next_monitoring_run(current_settings.get("frequency")) if current_settings.get("enabled") else current_settings.get("next_run_at"),
                 )
                 st.success("Тестовая Telegram-сводка отправлена.")
+            elif result.get("status") == "no_sites":
+                st.warning(result.get("text") or result.get("message"))
+            elif result.get("success"):
+                st.info(result.get("message") or "Аудиты запущены. Telegram-сводка придёт после завершения проверки.")
             elif result.get("error") == "telegram_not_configured":
                 st.warning("Добавьте TELEGRAM_BOT_TOKEN и подключите Telegram пользователя.")
             else:

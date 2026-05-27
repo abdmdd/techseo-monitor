@@ -1,13 +1,26 @@
 from datetime import datetime, timedelta
 
 from database.db import (
+    create_pending_telegram_summary,
+    get_active_audit_job,
     get_latest_audit_job,
+    get_pending_telegram_summaries,
     get_sites,
     get_telegram_integration,
     get_users_with_sites,
+    has_pending_telegram_summary,
+    mark_pending_telegram_summary_failed,
+    mark_pending_telegram_summary_sent,
 )
 from services.audit_service import enqueue_monthly_audit
-from services.telegram_service import send_telegram_message
+from services.telegram_service import send_admin_copy, send_telegram_message
+
+
+AUDIT_TYPE = "monthly"
+FRESH_AUDIT_HOURS = 24
+ADD_FIRST_SITE_MESSAGE = "Добавьте первый сайт для мониторинга, чтобы получить SEO-сводку."
+TEST_PENDING_MESSAGE = "Аудиты запущены. Telegram-сводка придёт после завершения проверки."
+TEST_ALREADY_RUNNING_MESSAGE = "Аудиты уже выполняются. Telegram-сводка придёт после завершения проверки."
 
 
 def _parse_datetime(value):
@@ -38,19 +51,56 @@ def _site_url(site):
     return site[2]
 
 
-def _run_audit_for_site(user_id, site):
-    site_id = site[0]
-    url = _site_url(site)
-    try:
-        job = enqueue_monthly_audit(url=url, user_id=user_id, site_id=site_id)
-    except Exception as exc:
-        return {"success": False, "audit_created": False, "message": str(exc)}
+def _is_fresh_audit(job):
+    if not job or job.get("status") != "completed" or not job.get("result"):
+        return False
+
+    finished_at = _parse_datetime(job.get("finished_at") or job.get("created_at"))
+    if not finished_at:
+        return False
+
+    return datetime.utcnow() - finished_at <= timedelta(hours=FRESH_AUDIT_HOURS)
+
+
+def _latest_site_job(user_id, site):
+    return get_latest_audit_job(user_id=user_id, site_url=_site_url(site), audit_type=AUDIT_TYPE)
+
+
+def _active_site_job(user_id, site):
+    return get_active_audit_job(user_id=user_id, site_url=_site_url(site), audit_type=AUDIT_TYPE)
+
+
+def _sites_without_fresh_audits(user_id, sites):
+    return [site for site in sites if not _is_fresh_audit(_latest_site_job(user_id, site))]
+
+
+def _all_sites_have_fresh_audits(user_id, sites):
+    return bool(sites) and not _sites_without_fresh_audits(user_id, sites)
+
+
+def _user_has_running_audits(user_id, sites):
+    return any(_active_site_job(user_id, site) for site in sites)
+
+
+def _enqueue_audits(user_id, sites):
+    queued = 0
+    already_running = 0
+    errors = []
+
+    for site in sites:
+        try:
+            job = enqueue_monthly_audit(url=_site_url(site), user_id=user_id, site_id=site[0])
+            if job and job.get("already_running"):
+                already_running += 1
+            elif job:
+                queued += 1
+        except Exception as exc:
+            errors.append({"site_url": _site_url(site), "message": str(exc)})
 
     return {
-        "success": True,
-        "job_id": job.get("id") if job else None,
-        "audit_created": bool(job and not job.get("already_running")),
-        "already_running": bool(job and job.get("already_running")),
+        "queued": queued,
+        "already_running": already_running,
+        "errors": errors,
     }
 
 
@@ -59,36 +109,22 @@ def ensure_fresh_audits_for_user(user_id, period="daily", force_refresh=False):
     if not sites:
         return {
             "success": False,
-            "message": "Добавьте первый сайт для мониторинга, чтобы получить SEO-сводку.",
+            "message": ADD_FIRST_SITE_MESSAGE,
             "audits_created": 0,
             "errors_count": 0,
             "projects_checked": 0,
         }
 
-    audits_created = 0
-    errors = []
-    checked = 0
-
-    for site in sites:
-        checked += 1
-        latest = get_latest_audit_job(user_id=user_id, site_url=_site_url(site), audit_type="monthly")
-        has_completed_audit = bool(latest and latest.get("status") == "completed" and latest.get("result"))
-        if not force_refresh and has_completed_audit:
-            continue
-
-        result = _run_audit_for_site(user_id, site)
-        if result.get("audit_created"):
-            audits_created += 1
-        if not result.get("success"):
-            errors.append({"site_url": _site_url(site), "message": result.get("message") or "Неизвестная ошибка"})
-
+    target_sites = sites if force_refresh else _sites_without_fresh_audits(user_id, sites)
+    result = _enqueue_audits(user_id, target_sites)
     return {
-        "success": not errors,
-        "message": "Аудиты обновлены." if not errors else "Часть сайтов не удалось проверить.",
-        "audits_created": audits_created,
-        "errors_count": len(errors),
-        "projects_checked": checked,
-        "errors": errors,
+        "success": not result["errors"],
+        "message": "Аудиты поставлены в очередь." if target_sites else "Свежие аудиты уже есть.",
+        "audits_created": result["queued"],
+        "already_running": result["already_running"],
+        "errors_count": len(result["errors"]),
+        "projects_checked": len(sites),
+        "errors": result["errors"],
     }
 
 
@@ -100,7 +136,7 @@ def _safe_int(value):
 
 
 def _latest_result(user_id, site_url):
-    job = get_latest_audit_job(user_id=user_id, site_url=site_url, audit_type="monthly")
+    job = get_latest_audit_job(user_id=user_id, site_url=site_url, audit_type=AUDIT_TYPE)
     if not job:
         return None, None
     audit_data = job.get("result") or {}
@@ -133,24 +169,15 @@ def _project_block(user_id, site):
     url = _site_url(site)
     result, job = _latest_result(user_id, url)
     if not job:
-        return f"""Сайт: {url}
+        return f"""Сайт: {_site_name(site)} ({url})
 Статус: Нет данных аудита
 
 Рекомендация:
 Запустите первый аудит сайта.
 """
 
-    if job.get("status") in ("queued", "running"):
-        return f"""Сайт: {url}
-Статус: Аудит уже выполняется. Дождитесь завершения.
-Последний запуск: {job.get("started_at") or job.get("created_at") or "-"}
-
-Рекомендация:
-Сводка обновится после завершения аудита.
-"""
-
     if job.get("status") == "error":
-        return f"""Сайт: {url}
+        return f"""Сайт: {_site_name(site)} ({url})
 Статус: Не удалось проверить сайт
 Причина: {job.get("error_message") or "неизвестная ошибка"}
 Последний аудит: {job.get("finished_at") or job.get("created_at") or "-"}
@@ -176,18 +203,10 @@ SEO score: {score if score is not None else 0}/100
 """
 
 
-def _was_recently_created(job, minutes=10):
-    created_at = _parse_datetime((job or {}).get("created_at"))
-    if not created_at:
-        return False
-    return datetime.utcnow() - created_at <= timedelta(minutes=minutes)
-
-
 def build_telegram_summary(user_id, period="daily"):
     sites = get_sites(user_id=user_id)
     if not sites:
-        message = "Добавьте первый сайт для мониторинга, чтобы получить SEO-сводку."
-        return {"success": False, "message": message, "text": message}
+        return {"success": False, "message": ADD_FIRST_SITE_MESSAGE, "text": ADD_FIRST_SITE_MESSAGE}
 
     period_label = {
         "daily": "день",
@@ -196,42 +215,123 @@ def build_telegram_summary(user_id, period="daily"):
     }.get(period, "день")
 
     blocks = [_project_block(user_id, site) for site in sites]
-    has_sparse_data = False
-    for site in sites:
-        latest = get_latest_audit_job(user_id=user_id, site_url=_site_url(site), audit_type="monthly")
-        if latest and latest.get("status") == "completed" and _was_recently_created(latest):
-            has_sparse_data = True
-            break
-    note = (
-        "\nМы автоматически запустили первый аудит, поэтому следующие сводки будут точнее."
-        if has_sparse_data
-        else ""
-    )
-    text = f"SEO-сводка за {period_label}\n\n" + "\n---\n".join(blocks) + note
+    text = f"SEO-сводка за {period_label}\n\n" + "\n---\n".join(blocks)
     return {"success": True, "message": "Сводка сформирована.", "text": text}
 
 
-def send_telegram_summary(user_id, period="daily", force_refresh=False):
-    ensure_result = ensure_fresh_audits_for_user(user_id, period=period, force_refresh=force_refresh)
-    summary = build_telegram_summary(user_id, period=period)
+def _send_text_to_user(user_id, text):
     telegram = get_telegram_integration(user_id)
-
     if not telegram:
-        return {
-            "success": False,
-            "message": "Telegram не подключён.",
-            "text": summary.get("text"),
-            "ensure": ensure_result,
-        }
+        return False, "telegram_not_connected"
+    return send_telegram_message(text, telegram.get("telegram_chat_id"))
 
-    ok, error = send_telegram_message(summary.get("text"), telegram.get("telegram_chat_id"))
+
+def send_completed_telegram_summary(user_id, period="daily", send_admin=True):
+    summary = build_telegram_summary(user_id, period=period)
+    text = summary.get("text") or summary.get("message")
+    ok, error = _send_text_to_user(user_id, text)
+    admin_ok = False
+    admin_error = None
+    if send_admin:
+        admin_ok, admin_error = send_admin_copy(text, user_id=user_id)
+
     return {
         "success": bool(ok),
         "message": "Telegram-сводка отправлена." if ok else f"Не удалось отправить Telegram-сводку: {error}",
-        "text": summary.get("text"),
+        "text": text,
         "error": error,
-        "ensure": ensure_result,
+        "admin_success": bool(admin_ok),
+        "admin_error": admin_error,
     }
+
+
+def send_telegram_summary(user_id, period="daily", force_refresh=False):
+    if force_refresh:
+        return request_test_telegram_summary(user_id, period=period)
+    return send_completed_telegram_summary(user_id, period=period)
+
+
+def request_test_telegram_summary(user_id, period="daily"):
+    sites = get_sites(user_id=user_id)
+    if not sites:
+        ok, error = _send_text_to_user(user_id, ADD_FIRST_SITE_MESSAGE)
+        return {
+            "success": bool(ok),
+            "status": "no_sites",
+            "message": ADD_FIRST_SITE_MESSAGE if ok else f"Не удалось отправить Telegram-сообщение: {error}",
+            "text": ADD_FIRST_SITE_MESSAGE,
+            "error": error,
+        }
+
+    if _all_sites_have_fresh_audits(user_id, sites):
+        result = send_completed_telegram_summary(user_id, period=period)
+        result["status"] = "sent"
+        return result
+
+    missing_sites = _sites_without_fresh_audits(user_id, sites)
+    enqueue_result = _enqueue_audits(user_id, missing_sites)
+    create_pending_telegram_summary(user_id, period, created_by="test")
+
+    if enqueue_result["errors"]:
+        return {
+            "success": False,
+            "status": "queued_with_errors",
+            "message": "Часть аудитов не удалось поставить в очередь. Telegram-сводка придёт после завершения доступных проверок.",
+            "ensure": enqueue_result,
+        }
+
+    already_pending = has_pending_telegram_summary(user_id, period)
+    message = TEST_ALREADY_RUNNING_MESSAGE if enqueue_result["already_running"] and not enqueue_result["queued"] else TEST_PENDING_MESSAGE
+    return {
+        "success": True,
+        "status": "pending" if already_pending else "queued",
+        "message": message,
+        "ensure": enqueue_result,
+    }
+
+
+def start_scheduled_daily_summary(user_id):
+    sites = get_sites(user_id=user_id)
+    if not sites:
+        ok, error = _send_text_to_user(user_id, ADD_FIRST_SITE_MESSAGE)
+        return {"success": bool(ok), "status": "no_sites", "message": ADD_FIRST_SITE_MESSAGE, "error": error}
+
+    enqueue_result = _enqueue_audits(user_id, sites)
+    create_pending_telegram_summary(user_id, "daily", created_by="scheduled")
+    return {
+        "success": not enqueue_result["errors"],
+        "status": "pending",
+        "message": "Ежедневные аудиты поставлены в очередь.",
+        "ensure": enqueue_result,
+    }
+
+
+def _pending_ready(summary):
+    sites = get_sites(user_id=summary["user_id"])
+    if not sites:
+        return True
+    return not _user_has_running_audits(summary["user_id"], sites)
+
+
+def process_pending_telegram_summaries(user_id=None):
+    processed = 0
+    sent = 0
+    failed = 0
+
+    for summary in get_pending_telegram_summaries(user_id=user_id):
+        if not _pending_ready(summary):
+            continue
+
+        processed += 1
+        result = send_completed_telegram_summary(summary["user_id"], period=summary.get("period") or "daily")
+        if result.get("success"):
+            mark_pending_telegram_summary_sent(summary["id"])
+            sent += 1
+        else:
+            mark_pending_telegram_summary_failed(summary["id"], result.get("error") or result.get("message"))
+            failed += 1
+
+    return {"processed": processed, "sent": sent, "failed": failed}
 
 
 def run_monthly_audit_for_all_users():
@@ -248,10 +348,6 @@ def run_monthly_audit_for_all_users():
         stats["projects_checked"] += result.get("projects_checked", 0)
         stats["audits_created"] += result.get("audits_created", 0)
         stats["errors_count"] += result.get("errors_count", 0)
-
-        if get_telegram_integration(user_id):
-            send_result = send_telegram_summary(user_id, period="monthly", force_refresh=False)
-            if not send_result.get("success"):
-                stats["errors_count"] += 1
+        create_pending_telegram_summary(user_id, "monthly", created_by="scheduled")
 
     return stats

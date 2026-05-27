@@ -4,6 +4,7 @@ from tasks.celery_app import celery
 
 from database.db import (
     get_due_seo_monitoring_settings,
+    get_telegram_integration,
     mark_seo_monitoring_sent,
     update_audit_job,
 )
@@ -12,8 +13,7 @@ from services.audit_service import (
     run_quarterly_audit
 )
 from services.history_service import save_audit_history
-from services.summary_service import send_telegram_summary
-from services.telegram_service import send_admin_copy
+from services.summary_service import process_pending_telegram_summaries, start_scheduled_daily_summary
 
 
 def _next_monitoring_run(now, frequency):
@@ -65,6 +65,7 @@ def run_monthly_audit_task(self, job_id, url=None, user_id=None):
             finished=True
         )
 
+        process_pending_telegram_summaries(user_id=user_id)
         return audit_data
     except Exception as exc:
         update_audit_job(
@@ -74,6 +75,7 @@ def run_monthly_audit_task(self, job_id, url=None, user_id=None):
             error_message=str(exc),
             finished=True
         )
+        process_pending_telegram_summaries(user_id=user_id)
         raise
 
 
@@ -97,14 +99,15 @@ def send_scheduled_seo_summaries():
 
     for settings in get_due_seo_monitoring_settings(now_value):
         try:
-            period = "weekly" if settings.get("frequency") == "weekly" else "daily"
-            result = send_telegram_summary(settings["user_id"], period=period, force_refresh=False)
-            admin_ok, _ = send_admin_copy(result.get("text") or result.get("message"), user_id=settings["user_id"])
-            if result.get("success") or admin_ok:
+            if settings.get("frequency") != "daily" or not get_telegram_integration(settings["user_id"]):
+                continue
+
+            result = start_scheduled_daily_summary(settings["user_id"])
+            if result.get("success"):
                 mark_seo_monitoring_sent(
                     settings["user_id"],
                     now_value,
-                    _next_monitoring_run(now, settings.get("frequency")),
+                    _next_monitoring_run(now, "daily"),
                 )
                 sent += 1
             else:
