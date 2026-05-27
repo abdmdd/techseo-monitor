@@ -236,6 +236,7 @@ def get_traffic_sources_report(access_token, counter_id, date_from="30daysAgo", 
 
     search_visits = 0
     ads_visits = 0
+    direct_visits = 0
     rows = (result.get("data") or {}).get("data") or []
     for row in rows:
         dimensions = row.get("dimensions") or []
@@ -250,12 +251,15 @@ def get_traffic_sources_report(access_token, counter_id, date_from="30daysAgo", 
             search_visits += visits
         if any(marker in source_text for marker in ("ad", "advert", "yandex_direct", "ya_direct", "реклам", "директ")):
             ads_visits += visits
+        if any(marker in source_text for marker in ("direct", "typein", "typed", "прям", "переходы по адресу")):
+            direct_visits += visits
 
     return {
         "ok": True,
         "data": result.get("data") or {},
         "summary": {
             "search_visits": search_visits,
+            "direct_visits": direct_visits,
             "ads_visits": ads_visits,
         },
         "status_code": result.get("status_code"),
@@ -273,7 +277,7 @@ def get_traffic_summary(access_token, counter_id, date_from="30daysAgo", date_to
     if sources_report.get("ok"):
         summary.update(sources_report.get("summary") or {})
     else:
-        summary.update({"search_visits": 0, "ads_visits": 0})
+        summary.update({"search_visits": 0, "direct_visits": 0, "ads_visits": 0})
 
     return {
         "ok": True,

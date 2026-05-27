@@ -14,7 +14,6 @@ from database.db import (
 )
 from services.yandex_metrika_service import (
     find_matching_counter,
-    get_search_traffic_anomaly,
     get_traffic_summary,
 )
 from services.yandex_oauth_service import get_yandex_access_token, get_yandex_integration_status
@@ -92,8 +91,30 @@ def _percent(current, previous):
     current = float(current or 0)
     previous = float(previous or 0)
     if previous == 0:
-        return "нет данных" if current == 0 else "+100%"
+        return "нет данных"
     return f"{((current - previous) / previous) * 100:+.1f}%"
+
+
+def _fmt_date(value):
+    return value.strftime("%d.%m.%Y")
+
+
+def _metrika_period(days):
+    current_to = date.today() - timedelta(days=1)
+    current_from = current_to - timedelta(days=days - 1)
+    compare_from = _same_day_previous_year(current_from)
+    compare_to = _same_day_previous_year(current_to)
+    return current_from, current_to, compare_from, compare_to
+
+
+def _has_period_data(summary):
+    return any(float((summary or {}).get(key) or 0) > 0 for key in ("visits", "search_visits", "direct_visits", "ads_visits"))
+
+
+def _value_or_no_data(value, has_data=True):
+    if not has_data:
+        return "нет данных"
+    return _safe_int(value)
 
 
 def _first_value(data, keys, default="нет данных"):
@@ -202,18 +223,20 @@ def _yandex_webmaster_summary(user_id, site_url):
     if not get_yandex_integration_status(user_id).get("connected"):
         return {
             "iks": "нет данных",
-            "loaded": "нет данных",
             "indexed": "нет данных",
+            "excluded": "нет данных",
             "problems": "нет данных",
+            "recommendations": "нет данных",
         }
 
     access_token, token_error = get_yandex_access_token(user_id)
     if token_error or not access_token:
         return {
             "iks": "нет данных",
-            "loaded": "нет данных",
             "indexed": "нет данных",
+            "excluded": "нет данных",
             "problems": "нет данных",
+            "recommendations": "нет данных",
         }
 
     match = find_matching_host(access_token, site_url)
@@ -222,18 +245,20 @@ def _yandex_webmaster_summary(user_id, site_url):
         if token_error or not access_token:
             return {
                 "iks": "нет данных",
-                "loaded": "нет данных",
                 "indexed": "нет данных",
+                "excluded": "нет данных",
                 "problems": "нет данных",
+                "recommendations": "нет данных",
             }
         match = find_matching_host(access_token, site_url)
 
     if not match.get("ok") or not match.get("found"):
         return {
             "iks": "нет данных",
-            "loaded": "нет данных",
             "indexed": "нет данных",
+            "excluded": "нет данных",
             "problems": "нет данных",
+            "recommendations": "нет данных",
         }
 
     host_id = match.get("host_id")
@@ -253,26 +278,36 @@ def _yandex_webmaster_summary(user_id, site_url):
     indexed = _first_value(summary_data, ["indexed_pages_count", "searchable_pages_count", "pages_in_search", "indexed_pages"])
     if indexed == "нет данных":
         indexed = _first_value(indexing_data, ["indexed_pages_count", "searchable_pages_count", "pages_in_search"])
+    excluded = _first_value(summary_data, ["excluded_pages_count", "excluded_pages", "not_indexed_pages_count"])
+    if excluded == "нет данных":
+        excluded = _first_value(indexing_data, ["excluded_pages_count", "excluded_pages", "not_indexed_pages_count"])
 
     return {
         "iks": _first_value(summary_data, ["sqi", "tic", "iks", "site_quality_index"]),
-        "loaded": _first_value(summary_data, ["downloaded_pages_count", "loaded_pages", "downloaded_pages", "pages_loaded"]),
         "indexed": indexed,
+        "excluded": excluded,
         "problems": problems_label,
+        "recommendations": "Проверьте найденные проблемы в Вебмастере" if problems_label == "есть" else "Критичных проблем из доступных данных не найдено",
     }
 
 
 def _yandex_metrika_summary(user_id, site_url):
+    def empty_period(days):
+        current_from, current_to, compare_from, compare_to = _metrika_period(days)
+        return {
+            "current_from": current_from,
+            "current_to": current_to,
+            "compare_from": compare_from,
+            "compare_to": compare_to,
+            "current": {},
+            "compare": {},
+            "compare_has_data": False,
+        }
+
     empty = {
-        "visits": "нет данных",
-        "pageviews": "нет данных",
-        "users": "нет данных",
-        "search": "нет данных",
-        "ads": "нет данных",
-        "visits_delta": "нет данных",
-        "search_delta": "нет данных",
-        "ads_delta": "нет данных",
-        "anomaly": "✅ нет",
+        "period_7": empty_period(7),
+        "period_30": empty_period(30),
+        "anomaly": "Существенных аномалий поискового трафика не обнаружено.",
     }
     if not get_yandex_integration_status(user_id).get("connected"):
         return empty
@@ -292,33 +327,42 @@ def _yandex_metrika_summary(user_id, site_url):
         return empty
 
     counter_id = match.get("counter_id")
-    today = date.today()
-    current_to = today - timedelta(days=1)
-    current_from = current_to - timedelta(days=6)
-    compare_from = _same_day_previous_year(current_from)
-    compare_to = _same_day_previous_year(current_to)
+    result = {}
+    for days, key in ((7, "period_7"), (30, "period_30")):
+        current_from, current_to, compare_from, compare_to = _metrika_period(days)
+        current = get_traffic_summary(access_token, counter_id, current_from.isoformat(), current_to.isoformat())
+        compare = get_traffic_summary(access_token, counter_id, compare_from.isoformat(), compare_to.isoformat())
+        if not current.get("ok"):
+            result[key] = empty[key]
+            continue
+        compare_summary = compare.get("summary") if compare.get("ok") else {}
+        result[key] = {
+            "current_from": current_from,
+            "current_to": current_to,
+            "compare_from": compare_from,
+            "compare_to": compare_to,
+            "current": current.get("summary") or {},
+            "compare": compare_summary,
+            "compare_has_data": compare.get("ok") and _has_period_data(compare_summary),
+        }
 
-    current = get_traffic_summary(access_token, counter_id, current_from.isoformat(), current_to.isoformat())
-    compare = get_traffic_summary(access_token, counter_id, compare_from.isoformat(), compare_to.isoformat())
-    anomaly = get_search_traffic_anomaly(access_token, counter_id)
-
-    if not current.get("ok"):
-        return empty
-
-    current_summary = current.get("summary") or {}
-    compare_summary = compare.get("summary") if compare.get("ok") else {}
-    anomaly_label = "⚠️ поисковый трафик изменился более чем на 20%" if anomaly.get("ok") and anomaly.get("anomaly") else "✅ нет"
+    period_30 = result.get("period_30") or empty["period_30"]
+    current_search = float((period_30.get("current") or {}).get("search_visits") or 0)
+    previous_search = float((period_30.get("compare") or {}).get("search_visits") or 0)
+    if not period_30.get("compare_has_data") or previous_search <= 0:
+        anomaly = "Недостаточно данных прошлого года для анализа аномалий поискового трафика."
+    else:
+        change = ((current_search - previous_search) / previous_search) * 100
+        anomaly = (
+            f"⚠️ поисковый трафик изменился более чем на 20% относительно прошлого года: {change:+.1f}%"
+            if abs(change) > 20
+            else "Существенных аномалий поискового трафика не обнаружено."
+        )
 
     return {
-        "visits": _safe_int(current_summary.get("visits")),
-        "pageviews": _safe_int(current_summary.get("pageviews")),
-        "users": _safe_int(current_summary.get("users")),
-        "search": _safe_int(current_summary.get("search_visits")),
-        "ads": _safe_int(current_summary.get("ads_visits")),
-        "visits_delta": _percent(current_summary.get("visits"), compare_summary.get("visits")),
-        "search_delta": _percent(current_summary.get("search_visits"), compare_summary.get("search_visits")),
-        "ads_delta": _percent(current_summary.get("ads_visits"), compare_summary.get("ads_visits")),
-        "anomaly": anomaly_label,
+        "period_7": result.get("period_7") or empty["period_7"],
+        "period_30": period_30,
+        "anomaly": anomaly,
     }
 
 
@@ -349,6 +393,29 @@ def collect_project_short_summary(user_id, site_id):
         "metrika": metrika,
         "total_problems": total_problems,
     }
+
+
+def _metric_line(label, current, previous, key, previous_has_data):
+    current_value = _safe_int((current or {}).get(key))
+    previous_value = _value_or_no_data((previous or {}).get(key), previous_has_data)
+    delta = _percent((current or {}).get(key), (previous or {}).get(key)) if previous_has_data else "нет данных"
+    return f"* {label}: {current_value} / было {previous_value} / изменение {delta}"
+
+
+def _format_metrika_period(title, period):
+    current = period.get("current") or {}
+    previous = period.get("compare") or {}
+    previous_has_data = bool(period.get("compare_has_data"))
+    return f"""{title}:
+{_fmt_date(period['current_from'])} — {_fmt_date(period['current_to'])}
+Сравнение с прошлым годом:
+{_fmt_date(period['compare_from'])} — {_fmt_date(period['compare_to'])}
+
+{_metric_line('Визиты', current, previous, 'visits', previous_has_data)}
+{_metric_line('Поиск', current, previous, 'search_visits', previous_has_data)}
+{_metric_line('Прямые', current, previous, 'direct_visits', previous_has_data)}
+{_metric_line('Реклама', current, previous, 'ads_visits', previous_has_data)}
+"""
 
 
 def _format_project(summary):
@@ -384,23 +451,14 @@ Meta / Canonical:
 
 Яндекс Вебмастер:
 * ИКС: {webmaster['iks']}
-* страниц загружено: {webmaster['loaded']}
 * страниц в поиске: {webmaster['indexed']}
+* исключено: {webmaster['excluded']}
 * проблемы: {webmaster['problems']}
+* рекомендации: {webmaster['recommendations']}
 
 Яндекс Метрика:
-Период: последние 7 дней
-
-* визиты: {metrika['visits']}
-* просмотры: {metrika['pageviews']}
-* пользователи: {metrika['users']}
-* поиск: {metrika['search']}
-* реклама: {metrika['ads']}
-
-Сравнение с такой же неделей прошлого года:
-* визиты: {metrika['visits_delta']}
-* поиск: {metrika['search_delta']}
-* реклама: {metrika['ads_delta']}
+{_format_metrika_period('Метрика, последние 7 полных дней', metrika['period_7'])}
+{_format_metrika_period('Метрика, последние 30 полных дней', metrika['period_30'])}
 
 Аномалии:
 {metrika['anomaly']}

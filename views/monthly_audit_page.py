@@ -6,16 +6,12 @@ import pandas as pd
 import streamlit as st
 
 from components.ui_helpers import metric_card, recommendation_card
-from database.db import get_yandex_traffic_snapshots
 from services.ai_service import generate_ai_recommendations, generate_ai_summary
 from services.audit_service import enqueue_monthly_audit, get_latest_monthly_audit_job
 from services.yandex_oauth_service import get_yandex_access_token, get_yandex_integration_status
 from services.yandex_metrika_service import (
-    collect_yandex_traffic_snapshot,
     find_matching_counter,
     friendly_metrika_error,
-    get_goals,
-    get_search_traffic_anomaly,
     get_traffic_summary,
 )
 from services.yandex_webmaster_service import (
@@ -1115,15 +1111,6 @@ def render_yandex_webmaster_section(user_id, site_url):
     render_webmaster_api_block("Robots", get_robots_info(access_token, host_id, webmaster_user_id))
 
 
-def _delta_percent(current, previous):
-    current = float(current or 0)
-    previous = float(previous or 0)
-    if previous == 0:
-        return "—" if current == 0 else "+100%"
-    delta = ((current - previous) / previous) * 100
-    return f"{delta:+.1f}%"
-
-
 def _date_value(value):
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
@@ -1136,6 +1123,8 @@ def _same_day_previous_year(value):
 
 
 def render_yandex_metrika_section(user_id, site_id, site_url):
+    return render_yandex_metrika_traffic_section(user_id, site_id, site_url)
+
     status = get_yandex_integration_status(user_id)
     today = date.today()
     default_to = today - timedelta(days=1)
@@ -1378,7 +1367,6 @@ def render_yandex_webmaster_summary_section(user_id, site_url):
     if not isinstance(issues, list):
         issues = []
 
-    loaded_pages = first_value(summary_data, ["downloaded_pages_count", "loaded_pages", "downloaded_pages", "pages_loaded"])
     indexed_pages = first_value(summary_data, ["indexed_pages_count", "searchable_pages_count", "pages_in_search", "indexed_pages"])
     excluded_pages = first_value(summary_data, ["excluded_pages_count", "excluded_pages", "not_indexed_pages_count"])
     if indexed_pages == "—":
@@ -1390,7 +1378,6 @@ def render_yandex_webmaster_summary_section(user_id, site_url):
         "Сводка Яндекс Вебмастера",
         [
             ("ИКС", first_value(summary_data, ["sqi", "tic", "iks", "site_quality_index"])),
-            ("Страниц загружено", loaded_pages),
             ("Страниц в поиске", indexed_pages),
             ("Исключено страниц", excluded_pages),
             ("Проблемы сайта", len(issues)),
@@ -1406,14 +1393,40 @@ def render_yandex_webmaster_summary_section(user_id, site_url):
         )
 
 
-def _traffic_table(current, previous):
+def _metrika_period(days):
+    current_to = date.today() - timedelta(days=1)
+    current_from = current_to - timedelta(days=days - 1)
+    compare_from = _same_day_previous_year(current_from)
+    compare_to = _same_day_previous_year(current_to)
+    return current_from, current_to, compare_from, compare_to
+
+
+def _format_ru_date(value):
+    return value.strftime("%d.%m.%Y")
+
+
+def _has_previous_data(summary):
+    return any(float((summary or {}).get(key) or 0) > 0 for key in ("visits", "search_visits", "direct_visits", "ads_visits"))
+
+
+def _traffic_value(value, previous_has_data=True):
+    if not previous_has_data:
+        return "нет данных"
+    return int(float(value or 0))
+
+
+def _traffic_change(current, previous, previous_has_data=True):
+    if not previous_has_data:
+        return "нет данных"
+    return format_percent_change(current, previous)
+
+
+def _traffic_table(current, previous, previous_has_data=True):
     metrics = [
-        ("Визиты", "visits"),
-        ("Просмотры", "pageviews"),
-        ("Пользователи", "users"),
-        ("Отказы", "bounce_rate"),
-        ("Поисковый трафик", "search_visits"),
-        ("Рекламный трафик", "ads_visits"),
+        ("Общие визиты", "visits"),
+        ("Поиск", "search_visits"),
+        ("Прямые", "direct_visits"),
+        ("Реклама", "ads_visits"),
     ]
     rows = []
     for label, key in metrics:
@@ -1421,20 +1434,43 @@ def _traffic_table(current, previous):
         previous_value = (previous or {}).get(key, 0)
         rows.append({
             "Метрика": label,
-            "Период": round(float(current_value or 0), 2),
-            "Период сравнения": round(float(previous_value or 0), 2),
-            "Изменение": format_percent_change(current_value, previous_value),
+            "Сейчас": int(float(current_value or 0)),
+            "В прошлом году": _traffic_value(previous_value, previous_has_data),
+            "Изменение": _traffic_change(current_value, previous_value, previous_has_data),
         })
     return rows
 
 
+def _render_metrika_period_table(title, current_from, current_to, compare_from, compare_to, current_summary, compare_summary, compare_ok):
+    previous_has_data = compare_ok and _has_previous_data(compare_summary)
+    st.markdown(f"#### {title}")
+    st.caption(
+        f"{_format_ru_date(current_from)} — {_format_ru_date(current_to)}\n\n"
+        f"Сравнение: {_format_ru_date(compare_from)} — {_format_ru_date(compare_to)}"
+    )
+    st.dataframe(
+        pd.DataFrame(_traffic_table(current_summary, compare_summary, previous_has_data)),
+        use_container_width=True,
+        hide_index=True,
+    )
+    return previous_has_data
+
+
+def _search_anomaly_text(current_summary, compare_summary, previous_has_data):
+    if not previous_has_data:
+        return "Недостаточно данных прошлого года для анализа аномалий поискового трафика."
+    current = float((current_summary or {}).get("search_visits") or 0)
+    previous = float((compare_summary or {}).get("search_visits") or 0)
+    if previous <= 0:
+        return "Недостаточно данных прошлого года для анализа аномалий поискового трафика."
+    change = ((current - previous) / previous) * 100
+    if abs(change) > 20:
+        return f"Обнаружено отклонение поискового трафика более чем на 20% относительно прошлого года: {change:+.1f}%."
+    return "Существенных аномалий поискового трафика не обнаружено."
+
+
 def render_yandex_metrika_traffic_section(user_id, site_id, site_url):
     status = get_yandex_integration_status(user_id)
-    today = date.today()
-    default_to = today - timedelta(days=1)
-    default_from = default_to - timedelta(days=29)
-    default_compare_to = default_from - timedelta(days=1)
-    default_compare_from = default_compare_to - timedelta(days=29)
 
     if not status["connected"]:
         st.info("Яндекс не подключён. Подключите общий аккаунт в разделе «Мои сайты».")
@@ -1465,75 +1501,66 @@ def render_yandex_metrika_traffic_section(user_id, site_id, site_url):
 
     counter_id = match.get("counter_id")
     st.markdown("#### Посещаемость")
-    same_period_last_year = st.checkbox(
-        "Сравнить с тем же периодом прошлого года",
-        value=False,
-        key=f"metrika_compare_last_year_{site_id}",
-    )
+    periods = [
+        ("Последние 7 полных дней", *_metrika_period(7)),
+        ("Последние 30 полных дней", *_metrika_period(30)),
+    ]
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        date_from = st.date_input("Период: с", value=default_from, key=f"traffic_date_from_{site_id}")
-    with col2:
-        date_to = st.date_input("Период: по", value=default_to, key=f"traffic_date_to_{site_id}")
+    last_30_current = {}
+    last_30_compare = {}
+    last_30_previous_has_data = False
+    rendered_any = False
 
-    if same_period_last_year:
-        compare_date_from = _same_day_previous_year(date_from)
-        compare_date_to = _same_day_previous_year(date_to)
-        with col3:
-            st.date_input("Сравнение: с", value=compare_date_from, key=f"traffic_compare_from_locked_{site_id}", disabled=True)
-        with col4:
-            st.date_input("Сравнение: по", value=compare_date_to, key=f"traffic_compare_to_locked_{site_id}", disabled=True)
-    else:
-        with col3:
-            compare_date_from = st.date_input("Сравнение: с", value=default_compare_from, key=f"traffic_compare_from_{site_id}")
-        with col4:
-            compare_date_to = st.date_input("Сравнение: по", value=default_compare_to, key=f"traffic_compare_to_{site_id}")
+    for title, current_from, current_to, compare_from, compare_to in periods:
+        traffic = get_traffic_summary(access_token, counter_id, _date_value(current_from), _date_value(current_to))
+        if traffic.get("status_code") == 401:
+            access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+            if token_error or not access_token:
+                st.error("Нужно переподключить Яндекс.")
+                return
+            traffic = get_traffic_summary(access_token, counter_id, _date_value(current_from), _date_value(current_to))
 
-    traffic = get_traffic_summary(access_token, counter_id, _date_value(date_from), _date_value(date_to))
-    if traffic.get("status_code") == 401:
-        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
-        if token_error or not access_token:
-            st.error("Нужно переподключить Яндекс.")
+        compare_traffic = get_traffic_summary(access_token, counter_id, _date_value(compare_from), _date_value(compare_to))
+        if compare_traffic.get("status_code") == 401:
+            access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
+            if token_error or not access_token:
+                st.error("Нужно переподключить Яндекс.")
+                return
+            compare_traffic = get_traffic_summary(access_token, counter_id, _date_value(compare_from), _date_value(compare_to))
+
+        if not traffic.get("ok"):
+            st.warning(friendly_metrika_error(traffic))
             return
-        traffic = get_traffic_summary(access_token, counter_id, _date_value(date_from), _date_value(date_to))
 
-    compare_traffic = get_traffic_summary(access_token, counter_id, _date_value(compare_date_from), _date_value(compare_date_to))
-    if compare_traffic.get("status_code") == 401:
-        access_token, token_error = get_yandex_access_token(user_id, force_refresh=True)
-        if token_error or not access_token:
-            st.error("Нужно переподключить Яндекс.")
-            return
-        compare_traffic = get_traffic_summary(access_token, counter_id, _date_value(compare_date_from), _date_value(compare_date_to))
-
-    if not traffic.get("ok"):
-        st.warning(friendly_metrika_error(traffic))
-        return
-
-    current_summary = traffic.get("summary") or {}
-    compare_summary = compare_traffic.get("summary") if compare_traffic.get("ok") else {}
-    has_data = any(float(current_summary.get(key) or 0) > 0 for key in ("visits", "pageviews", "users", "search_visits", "ads_visits"))
-    if not has_data:
-        st.info("Недостаточно данных для анализа посещаемости.")
-        return
-
-    st.dataframe(
-        pd.DataFrame(_traffic_table(current_summary, compare_summary)),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    anomaly = get_search_traffic_anomaly(access_token, counter_id)
-    if anomaly.get("ok") and anomaly.get("anomaly"):
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        st.warning(
-            "На сайте обнаружено аномальное отклонение посещаемости (более 20%) из поисковых сетей от средних значений.\n\n"
-            f"Значение за вчера ({yesterday}): {anomaly.get('yesterday_value')}\n"
-            f"Среднее значение за последние 4 недели: {anomaly.get('baseline_average')}\n"
-            f"Отклонение: {anomaly.get('deviation_percent')}%"
+        current_summary = traffic.get("summary") or {}
+        compare_summary = compare_traffic.get("summary") if compare_traffic.get("ok") else {}
+        has_data = any(float(current_summary.get(key) or 0) > 0 for key in ("visits", "search_visits", "direct_visits", "ads_visits"))
+        if has_data:
+            rendered_any = True
+        previous_has_data = _render_metrika_period_table(
+            title,
+            current_from,
+            current_to,
+            compare_from,
+            compare_to,
+            current_summary,
+            compare_summary,
+            compare_traffic.get("ok"),
         )
-    elif anomaly.get("ok") and not anomaly.get("has_enough_data", True):
+        if "30" in title:
+            last_30_current = current_summary
+            last_30_compare = compare_summary
+            last_30_previous_has_data = previous_has_data
+
+    if not rendered_any:
         st.info("Недостаточно данных для анализа посещаемости.")
+        return
+
+    anomaly_text = _search_anomaly_text(last_30_current, last_30_compare, last_30_previous_has_data)
+    if anomaly_text.startswith("Обнаружено"):
+        st.warning(anomaly_text)
+    else:
+        st.info(anomaly_text)
 
     st.link_button(
         "Открыть счётчик в Метрике",
@@ -1684,7 +1711,7 @@ def render_audit_sections(user_id, site_id, url, result, score, errors_count, ya
         render_yandex_webmaster_summary_section(user_id, url)
 
     elif selected_section == audit_sections[5]:
-        section_header("Яндекс Метрика", "Трафик, отказы и цели из счётчика Метрики для выбранного сайта.")
+        section_header("Яндекс Метрика", "Визиты по каналам за последние 7 и 30 полных дней с сравнением к прошлому году.")
         render_yandex_metrika_traffic_section(user_id, site_id, url)
 
     elif selected_section == audit_sections[6]:
