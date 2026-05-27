@@ -32,6 +32,11 @@ def run_monthly_audit(url):
 
 
 def enqueue_monthly_audit(url, user_id, site_id=None):
+    active_job = get_active_audit_job(user_id=user_id, site_url=url, audit_type="monthly")
+    if active_job:
+        active_job["already_running"] = True
+        return active_job
+
     job_id = create_audit_job(
         user_id=user_id,
         site_id=site_id,

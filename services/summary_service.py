@@ -1,27 +1,13 @@
 from datetime import datetime, timedelta
 
 from database.db import (
-    create_audit_job,
     get_latest_audit_job,
     get_sites,
     get_telegram_integration,
     get_users_with_sites,
-    update_audit_job,
 )
-from services.audit_service import run_monthly_audit
-from services.history_service import save_audit_history
+from services.audit_service import enqueue_monthly_audit
 from services.telegram_service import send_telegram_message
-
-
-PERIOD_HOURS = {
-    "daily": 24,
-    "weekly": 24 * 7,
-    "monthly": 24 * 30,
-}
-
-
-def _period_hours(period):
-    return PERIOD_HOURS.get(period, PERIOD_HOURS["daily"])
 
 
 def _parse_datetime(value):
@@ -44,24 +30,6 @@ def _parse_datetime(value):
     return parsed
 
 
-def _is_fresh(job, period):
-    if not job or job.get("status") != "completed" or not job.get("result"):
-        return False
-
-    return _is_recent_job(job, period)
-
-
-def _is_recent_job(job, period):
-    if not job:
-        return False
-
-    created_at = _parse_datetime(job.get("finished_at") or job.get("created_at"))
-    if not created_at:
-        return False
-
-    return datetime.utcnow() - created_at <= timedelta(hours=_period_hours(period))
-
-
 def _site_name(site):
     return site[1]
 
@@ -73,44 +41,17 @@ def _site_url(site):
 def _run_audit_for_site(user_id, site):
     site_id = site[0]
     url = _site_url(site)
-    job_id = create_audit_job(user_id=user_id, site_id=site_id, site_url=url, audit_type="monthly")
-
-    update_audit_job(job_id, status="running", progress=10, started=True)
     try:
-        update_audit_job(job_id, progress=30)
-        audit_data = run_monthly_audit(url)
-        update_audit_job(job_id, progress=85)
-
-        result = audit_data.get("result") or {}
-        score = audit_data.get("score") or 0
-        errors_count = audit_data.get("errors_count") or 0
-        save_audit_history(
-            url=url,
-            audit_type="Ежемесячный аудит",
-            result=result,
-            score=score,
-            errors_count=errors_count,
-            user_id=user_id,
-        )
-        update_audit_job(
-            job_id,
-            status="completed",
-            progress=100,
-            result=audit_data,
-            seo_score=score,
-            errors_count=errors_count,
-            finished=True,
-        )
-        return {"success": True, "job_id": job_id, "audit_created": True}
+        job = enqueue_monthly_audit(url=url, user_id=user_id, site_id=site_id)
     except Exception as exc:
-        update_audit_job(
-            job_id,
-            status="error",
-            progress=100,
-            error_message=str(exc),
-            finished=True,
-        )
-        return {"success": False, "job_id": job_id, "audit_created": False, "message": str(exc)}
+        return {"success": False, "audit_created": False, "message": str(exc)}
+
+    return {
+        "success": True,
+        "job_id": job.get("id") if job else None,
+        "audit_created": bool(job and not job.get("already_running")),
+        "already_running": bool(job and job.get("already_running")),
+    }
 
 
 def ensure_fresh_audits_for_user(user_id, period="daily", force_refresh=False):
@@ -131,7 +72,8 @@ def ensure_fresh_audits_for_user(user_id, period="daily", force_refresh=False):
     for site in sites:
         checked += 1
         latest = get_latest_audit_job(user_id=user_id, site_url=_site_url(site), audit_type="monthly")
-        if not force_refresh and (_is_fresh(latest, period) or (latest and latest.get("status") == "error" and _is_recent_job(latest, period))):
+        has_completed_audit = bool(latest and latest.get("status") == "completed" and latest.get("result"))
+        if not force_refresh and has_completed_audit:
             continue
 
         result = _run_audit_for_site(user_id, site)
@@ -196,6 +138,15 @@ def _project_block(user_id, site):
 
 Рекомендация:
 Запустите первый аудит сайта.
+"""
+
+    if job.get("status") in ("queued", "running"):
+        return f"""Сайт: {url}
+Статус: Аудит уже выполняется. Дождитесь завершения.
+Последний запуск: {job.get("started_at") or job.get("created_at") or "-"}
+
+Рекомендация:
+Сводка обновится после завершения аудита.
 """
 
     if job.get("status") == "error":

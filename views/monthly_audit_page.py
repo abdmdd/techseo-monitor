@@ -1823,7 +1823,10 @@ def show_monthly_audit_page():
         try:
             latest_job = enqueue_monthly_audit(url=url, user_id=user_id, site_id=site_id)
             clear_cached_data()
-            st.success("Аудит поставлен в очередь. Можно продолжать работать с платформой.")
+            if latest_job.get("already_running"):
+                st.info("Аудит уже выполняется. Дождитесь завершения.")
+            else:
+                st.success("Аудит поставлен в очередь. Можно продолжать работать с платформой.")
             st.rerun()
         except Exception as exc:
             st.error(f"Не удалось поставить аудит в очередь Celery: {exc}")

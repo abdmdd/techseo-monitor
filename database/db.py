@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 from config.settings import SQLITE_DB_PATH
@@ -12,6 +13,54 @@ from database.database import (
 
 
 DB_PATH = Path(SQLITE_DB_PATH)
+SQLITE_BUSY_TIMEOUT_MS = 5000
+SQLITE_LOCK_RETRIES = 3
+SQLITE_LOCK_RETRY_DELAY = 0.2
+
+
+def _is_locked_error(exc):
+    return "database is locked" in str(exc).lower()
+
+
+def _retry_locked(operation):
+    for attempt in range(SQLITE_LOCK_RETRIES + 1):
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            if not _is_locked_error(exc) or attempt >= SQLITE_LOCK_RETRIES:
+                raise
+            time.sleep(SQLITE_LOCK_RETRY_DELAY * (attempt + 1))
+
+
+class RetryingCursor:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def execute(self, *args, **kwargs):
+        return _retry_locked(lambda: self._cursor.execute(*args, **kwargs))
+
+    def executemany(self, *args, **kwargs):
+        return _retry_locked(lambda: self._cursor.executemany(*args, **kwargs))
+
+    def executescript(self, *args, **kwargs):
+        return _retry_locked(lambda: self._cursor.executescript(*args, **kwargs))
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class RetryingConnection(sqlite3.Connection):
+    def cursor(self, *args, **kwargs):
+        return RetryingCursor(sqlite3.Connection.cursor(self, *args, **kwargs))
+
+    def execute(self, *args, **kwargs):
+        return _retry_locked(lambda: sqlite3.Connection.execute(self, *args, **kwargs))
+
+    def executemany(self, *args, **kwargs):
+        return _retry_locked(lambda: sqlite3.Connection.executemany(self, *args, **kwargs))
+
+    def commit(self):
+        return _retry_locked(lambda: sqlite3.Connection.commit(self))
 
 
 def get_connection():
@@ -19,7 +68,10 @@ def get_connection():
         return PostgresConnectionAdapter()
 
     DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5, factory=RetryingConnection)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
