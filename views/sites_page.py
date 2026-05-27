@@ -1,5 +1,6 @@
 from html import escape
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
 
 import streamlit as st
@@ -233,8 +234,14 @@ def render_yandex_site_matches(user_id, sites):
 
 
 def _next_monitoring_run(frequency):
-    days = 7 if frequency == "weekly" else 1
-    return (datetime.utcnow() + timedelta(days=days)).isoformat(timespec="seconds")
+    if frequency == "weekly":
+        return (datetime.utcnow() + timedelta(days=7)).isoformat(timespec="seconds")
+
+    moscow_now = datetime.now(ZoneInfo("Europe/Moscow"))
+    next_run = moscow_now.replace(hour=8, minute=0, second=0, microsecond=0)
+    if next_run <= moscow_now:
+        next_run += timedelta(days=1)
+    return next_run.astimezone(ZoneInfo("UTC")).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 def _mask_chat_id(chat_id):

@@ -80,3 +80,25 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+
+  celery_beat:
+
+    build: .
+
+    container_name: techseo_celery_beat
+
+    command: celery -A tasks.audit_tasks beat --loglevel=info
+
+    env_file:
+      - .env
+
+    volumes:
+      - .:/app
+      - /home/madina/techseo-data:/app/data
+
+    depends_on:
+      - redis
+
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0

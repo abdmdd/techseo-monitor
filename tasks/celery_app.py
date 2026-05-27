@@ -1,6 +1,7 @@
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 
 
 # ==================================================
@@ -27,5 +28,12 @@ celery.conf.update(
 
     timezone="Europe/Moscow",
 
-    enable_utc=True
+    enable_utc=True,
+
+    beat_schedule={
+        "send-daily-seo-summaries-at-8-msk": {
+            "task": "tasks.audit_tasks.send_scheduled_seo_summaries",
+            "schedule": crontab(hour=8, minute=0),
+        },
+    }
 )

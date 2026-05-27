@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from tasks.celery_app import celery
 
@@ -16,9 +17,18 @@ from services.history_service import save_audit_history
 from services.summary_service import process_pending_telegram_summaries, start_scheduled_daily_summary
 
 
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+
 def _next_monitoring_run(now, frequency):
-    days = 7 if frequency == "weekly" else 1
-    return (now + timedelta(days=days)).isoformat(timespec="seconds")
+    if frequency == "weekly":
+        return (now + timedelta(days=7)).isoformat(timespec="seconds")
+
+    moscow_now = datetime.now(MOSCOW_TZ)
+    next_run = moscow_now.replace(hour=8, minute=0, second=0, microsecond=0)
+    if next_run <= moscow_now:
+        next_run += timedelta(days=1)
+    return next_run.astimezone(ZoneInfo("UTC")).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 # ==================================================
