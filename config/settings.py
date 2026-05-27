@@ -118,6 +118,13 @@ TELEGRAM_CHAT_ID = os.getenv(
     ""
 )
 
+TELEGRAM_ADMIN_CHAT_ID = os.getenv(
+    "TELEGRAM_ADMIN_CHAT_ID",
+    TELEGRAM_CHAT_ID
+)
+if not TELEGRAM_ADMIN_CHAT_ID:
+    TELEGRAM_ADMIN_CHAT_ID = TELEGRAM_CHAT_ID
+
 
 # ==================================================
 # REPORTS

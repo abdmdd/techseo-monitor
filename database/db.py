@@ -330,6 +330,18 @@ def init_db():
     """)
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS telegram_integrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE,
+            telegram_chat_id TEXT NOT NULL,
+            telegram_username TEXT,
+            connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'connected',
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS ai_audit_insights (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -426,6 +438,10 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_seo_monitoring_settings_due
         ON seo_monitoring_settings(enabled, next_run_at)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_telegram_integrations_user
+        ON telegram_integrations(user_id, status)
     """)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_ai_audit_insights_latest
@@ -975,6 +991,83 @@ def mark_seo_monitoring_sent(user_id, last_run_at, next_run_at):
             updated_at = CURRENT_TIMESTAMP
         WHERE user_id = ?
     """, (last_run_at, next_run_at, user_id))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
+
+def _telegram_integration_row_to_dict(row):
+    if not row:
+        return None
+
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "telegram_chat_id": row[2],
+        "telegram_username": row[3],
+        "connected_at": row[4],
+        "status": row[5],
+    }
+
+
+def save_telegram_integration(user_id, chat_id, username=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO telegram_integrations
+        (
+            user_id,
+            telegram_chat_id,
+            telegram_username,
+            status,
+            connected_at
+        )
+        VALUES (?, ?, ?, 'connected', CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id)
+        DO UPDATE SET
+            telegram_chat_id = excluded.telegram_chat_id,
+            telegram_username = excluded.telegram_username,
+            status = 'connected',
+            connected_at = CURRENT_TIMESTAMP
+    """, (
+        user_id,
+        str(chat_id).strip(),
+        (username or "").strip() or None,
+    ))
+    conn.commit()
+    conn.close()
+    return get_telegram_integration(user_id)
+
+
+def get_telegram_integration(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            id,
+            user_id,
+            telegram_chat_id,
+            telegram_username,
+            connected_at,
+            status
+        FROM telegram_integrations
+        WHERE user_id = ? AND status = 'connected'
+        LIMIT 1
+    """, (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return _telegram_integration_row_to_dict(row)
+
+
+def disconnect_telegram(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE telegram_integrations
+        SET status = 'disconnected'
+        WHERE user_id = ?
+    """, (user_id,))
     conn.commit()
     affected = cursor.rowcount
     conn.close()

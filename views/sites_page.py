@@ -7,11 +7,19 @@ import streamlit as st
 from components.ui_helpers import metric_card
 from database.db import (
     add_site,
+    disconnect_telegram,
     get_seo_monitoring_settings,
+    get_telegram_integration,
     mark_seo_monitoring_sent,
     upsert_seo_monitoring_settings,
 )
-from services.telegram_service import format_all_projects_seo_summary, send_telegram_message
+from services.telegram_service import (
+    format_all_projects_seo_summary,
+    generate_telegram_connect_token,
+    send_admin_copy,
+    send_telegram_message,
+    sync_telegram_updates,
+)
 from services.yandex_oauth_service import (
     disconnect_yandex_integration,
     generate_yandex_auth_url,
@@ -231,8 +239,22 @@ def _next_monitoring_run(frequency):
     return (datetime.utcnow() + timedelta(days=days)).isoformat(timespec="seconds")
 
 
+def _mask_chat_id(chat_id):
+    value = str(chat_id or "")
+    if len(value) <= 4:
+        return "****"
+    return f"{value[:2]}***{value[-2:]}"
+
+
+def _telegram_connect_url(user_id):
+    token = generate_telegram_connect_token(user_id)
+    return f"https://t.me/techseo_monitor_alert_bot?start=connect_{token}"
+
+
 def automatic_monitoring_block(user_id):
     settings = get_seo_monitoring_settings(user_id)
+    telegram = get_telegram_integration(user_id)
+    telegram_connected = bool(telegram)
     frequency_options = {
         "every_3_days": "раз в 3 дня",
         "weekly": "раз в неделю",
@@ -240,10 +262,39 @@ def automatic_monitoring_block(user_id):
     current_frequency = settings.get("frequency") if settings.get("frequency") in frequency_options else "every_3_days"
 
     st.markdown("#### Автоматический мониторинг")
+    if telegram_connected:
+        username = telegram.get("telegram_username")
+        account_label = f"@{username}" if username else _mask_chat_id(telegram.get("telegram_chat_id"))
+        st.success(f"Telegram подключён: {account_label}")
+        st.caption(f"chat_id: {_mask_chat_id(telegram.get('telegram_chat_id'))}")
+    else:
+        st.warning("Подключите Telegram, чтобы получать сводки.")
+
+    tg_col1, tg_col2, tg_col3 = st.columns(3)
+    with tg_col1:
+        st.link_button("Подключить Telegram", _telegram_connect_url(user_id), use_container_width=True)
+    with tg_col2:
+        if st.button("Проверить подключение Telegram", use_container_width=True):
+            result = sync_telegram_updates()
+            if result.get("ok") and get_telegram_integration(user_id):
+                st.success("Telegram подключён.")
+                st.rerun()
+            elif result.get("ok"):
+                st.info("Подключение пока не найдено. Нажмите Start в боте и попробуйте ещё раз.")
+            else:
+                st.warning(result.get("message", "Не удалось проверить подключение Telegram."))
+    with tg_col3:
+        if st.button("Отключить Telegram", disabled=not telegram_connected, use_container_width=True):
+            disconnect_telegram(user_id)
+            upsert_seo_monitoring_settings(user_id, enabled=False, frequency=current_frequency, next_run_at=None)
+            st.success("Telegram отключён.")
+            st.rerun()
+
     enabled = st.checkbox(
         "Включить Telegram-сводку",
-        value=bool(settings.get("enabled")),
+        value=bool(settings.get("enabled")) and telegram_connected,
         key="seo_monitoring_enabled",
+        disabled=not telegram_connected,
     )
     frequency = st.selectbox(
         "Периодичность",
@@ -256,20 +307,24 @@ def automatic_monitoring_block(user_id):
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Сохранить настройки мониторинга", use_container_width=True):
+            if not telegram_connected and enabled:
+                st.warning("Подключите Telegram, чтобы получать сводки.")
+                return
             upsert_seo_monitoring_settings(
                 user_id=user_id,
-                enabled=enabled,
+                enabled=enabled and telegram_connected,
                 frequency=frequency,
-                next_run_at=_next_monitoring_run(frequency) if enabled else None,
+                next_run_at=_next_monitoring_run(frequency) if enabled and telegram_connected else None,
             )
             st.success("Настройки автоматического мониторинга сохранены.")
             st.rerun()
 
     with col2:
-        if st.button("Отправить тестовую сводку", use_container_width=True):
+        if st.button("Отправить тестовую сводку", disabled=not telegram_connected, use_container_width=True):
             with st.spinner("Собираем SEO-сводку по всем проектам..."):
                 message = format_all_projects_seo_summary(user_id)
-                ok, error = send_telegram_message(message)
+                ok, error = send_telegram_message(message, telegram.get("telegram_chat_id") if telegram else None)
+                send_admin_copy(message, user_id=user_id)
             if ok:
                 now_value = datetime.utcnow().isoformat(timespec="seconds")
                 current_settings = get_seo_monitoring_settings(user_id)
@@ -287,7 +342,7 @@ def automatic_monitoring_block(user_id):
                 )
                 st.success("Тестовая Telegram-сводка отправлена.")
             elif error == "telegram_not_configured":
-                st.warning("Добавьте TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в окружение.")
+                st.warning("Добавьте TELEGRAM_BOT_TOKEN и подключите Telegram пользователя.")
             else:
                 st.warning("Не удалось отправить Telegram-сводку. Проверьте настройки бота и chat_id.")
 
@@ -296,6 +351,7 @@ def automatic_monitoring_block(user_id):
         "Статус Telegram-сводки",
         [
             ("Включено", "Да" if current_settings.get("enabled") else "Нет"),
+            ("Telegram", "Подключён" if telegram_connected else "Не подключён"),
             ("Периодичность", frequency_options.get(current_settings.get("frequency"), "раз в 3 дня")),
             ("Последняя отправка", current_settings.get("last_run_at") or "ещё не было"),
             ("Следующая отправка", current_settings.get("next_run_at") or "не запланирована"),

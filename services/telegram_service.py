@@ -1,11 +1,16 @@
+import base64
+import hashlib
+import hmac
 from datetime import date, datetime, timedelta
 
 import requests
 
-from config.settings import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from config.settings import TELEGRAM_ADMIN_CHAT_ID, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, YANDEX_CLIENT_SECRET
 from database.db import (
     get_latest_audit_job,
     get_sites,
+    get_user_by_id,
+    save_telegram_integration,
 )
 from services.yandex_metrika_service import (
     find_matching_counter,
@@ -21,12 +26,52 @@ from services.yandex_webmaster_service import (
 )
 
 
-TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/{method}"
 TELEGRAM_TIMEOUT = 20
+TELEGRAM_CONNECT_TTL_SECONDS = 24 * 60 * 60
 
 
 def _today():
     return date.today().isoformat()
+
+
+def _telegram_secret():
+    return (YANDEX_CLIENT_SECRET or TELEGRAM_BOT_TOKEN or "techseo-monitor").strip().encode("utf-8")
+
+
+def _b64encode(value):
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _b64decode(value):
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode((value + padding).encode("ascii"))
+
+
+def generate_telegram_connect_token(user_id):
+    timestamp = int(datetime.utcnow().timestamp())
+    payload = f"{int(user_id)}:{timestamp}"
+    signature = hmac.new(_telegram_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return _b64encode(f"{payload}:{signature}".encode("utf-8"))
+
+
+def verify_telegram_connect_token(token):
+    try:
+        decoded = _b64decode(str(token or "")).decode("utf-8")
+        user_id_text, timestamp_text, signature = decoded.split(":", 2)
+        payload = f"{int(user_id_text)}:{int(timestamp_text)}"
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None
+
+    expected = hmac.new(_telegram_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return None
+
+    age = int(datetime.utcnow().timestamp()) - int(timestamp_text)
+    if age < 0 or age > TELEGRAM_CONNECT_TTL_SECONDS:
+        return None
+
+    return int(user_id_text)
 
 
 def _same_day_previous_year(value):
@@ -381,12 +426,7 @@ def format_all_projects_seo_summary(user_id):
     return header + "\n" + "\n".join(project_blocks) + "\n━━━━━━━━━━━━"
 
 
-def send_telegram_message(text):
-    token = (TELEGRAM_BOT_TOKEN or "").strip()
-    chat_id = (TELEGRAM_CHAT_ID or "").strip()
-    if not token or not chat_id:
-        return False, "telegram_not_configured"
-
+def _telegram_chunks(text):
     chunks = []
     current = ""
     for line in str(text or "").splitlines():
@@ -397,11 +437,19 @@ def send_telegram_message(text):
             current = f"{current}\n{line}" if current else line
     if current:
         chunks.append(current)
+    return chunks or [""]
+
+
+def send_telegram_message(text, chat_id):
+    token = (TELEGRAM_BOT_TOKEN or "").strip()
+    chat_id = str(chat_id or "").strip()
+    if not token or not chat_id:
+        return False, "telegram_not_configured"
 
     try:
-        for chunk in chunks:
+        for chunk in _telegram_chunks(text):
             response = requests.post(
-                TELEGRAM_API_URL.format(token=token),
+                TELEGRAM_API_URL.format(token=token, method="sendMessage"),
                 data={
                     "chat_id": chat_id,
                     "text": chunk,
@@ -414,3 +462,80 @@ def send_telegram_message(text):
         return False, exc.__class__.__name__
 
     return True, None
+
+
+def _admin_chat_id():
+    return (TELEGRAM_ADMIN_CHAT_ID or TELEGRAM_CHAT_ID or "").strip()
+
+
+def send_admin_copy(text, user_id=None):
+    chat_id = _admin_chat_id()
+    if not chat_id:
+        return False, "telegram_admin_not_configured"
+
+    user_label = str(user_id or "unknown")
+    if user_id is not None:
+        user = get_user_by_id(user_id)
+        if user:
+            user_label = f"{user[0]} / {user[2]}"
+
+    admin_text = f"Админ-копия. Пользователь: {user_label}\n\n{text}"
+    return send_telegram_message(admin_text, chat_id)
+
+
+def sync_telegram_updates():
+    token = (TELEGRAM_BOT_TOKEN or "").strip()
+    if not token:
+        return {
+            "ok": False,
+            "connected": 0,
+            "message": "TELEGRAM_BOT_TOKEN не настроен.",
+        }
+
+    try:
+        response = requests.get(
+            TELEGRAM_API_URL.format(token=token, method="getUpdates"),
+            timeout=TELEGRAM_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        return {
+            "ok": False,
+            "connected": 0,
+            "message": f"Не удалось получить обновления Telegram ({exc.__class__.__name__}).",
+        }
+    except ValueError:
+        return {
+            "ok": False,
+            "connected": 0,
+            "message": "Telegram вернул невалидный ответ.",
+        }
+
+    connected = 0
+    for update in payload.get("result", []):
+        message = update.get("message") or {}
+        text = (message.get("text") or "").strip()
+        if not text.startswith("/start connect_"):
+            continue
+
+        token_value = text.split("connect_", 1)[1].split()[0].strip()
+        user_id = verify_telegram_connect_token(token_value)
+        if not user_id:
+            continue
+
+        chat = message.get("chat") or {}
+        from_user = message.get("from") or {}
+        chat_id = chat.get("id")
+        username = from_user.get("username") or chat.get("username")
+        if not chat_id:
+            continue
+
+        save_telegram_integration(user_id, chat_id, username=username)
+        connected += 1
+
+    return {
+        "ok": True,
+        "connected": connected,
+        "message": f"Подключений найдено: {connected}.",
+    }
