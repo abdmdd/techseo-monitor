@@ -1,21 +1,21 @@
 import json
+import logging
 import sqlite3
 import time
 from pathlib import Path
 
 from config.settings import SQLITE_DB_PATH
-from database.database import (
-    PostgresConnectionAdapter,
-    get_default_cms_blocks,
-    init_sqlalchemy_database,
-    is_postgres,
-)
 
 
 DB_PATH = Path(SQLITE_DB_PATH)
 SQLITE_BUSY_TIMEOUT_MS = 5000
 SQLITE_LOCK_RETRIES = 3
 SQLITE_LOCK_RETRY_DELAY = 0.2
+LOGGER = logging.getLogger(__name__)
+
+
+def get_default_cms_blocks():
+    return []
 
 
 def _is_locked_error(exc):
@@ -29,6 +29,7 @@ def _retry_locked(operation):
         except sqlite3.OperationalError as exc:
             if not _is_locked_error(exc) or attempt >= SQLITE_LOCK_RETRIES:
                 raise
+            LOGGER.warning("SQLite database is locked, retrying in %.1fs", SQLITE_LOCK_RETRY_DELAY * (attempt + 1))
             time.sleep(SQLITE_LOCK_RETRY_DELAY * (attempt + 1))
 
 
@@ -64,9 +65,6 @@ class RetryingConnection(sqlite3.Connection):
 
 
 def get_connection():
-    if is_postgres():
-        return PostgresConnectionAdapter()
-
     DB_PATH.parent.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=5, factory=RetryingConnection)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -216,10 +214,6 @@ def migrate_yandex_integrations_nullable_site(cursor):
 
 
 def init_db():
-    if is_postgres():
-        init_sqlalchemy_database(seed_demo=True)
-        return
-
     conn = get_connection()
     cursor = conn.cursor()
 
