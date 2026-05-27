@@ -9,6 +9,7 @@ from config.settings import TELEGRAM_ADMIN_CHAT_ID, TELEGRAM_BOT_TOKEN, TELEGRAM
 from database.db import (
     get_latest_audit_job,
     get_sites,
+    get_telegram_integration,
     get_user_by_id,
     save_telegram_integration,
 )
@@ -530,6 +531,11 @@ def send_admin_copy(text, user_id=None):
     chat_id = _admin_chat_id()
     if not chat_id:
         return False, "telegram_admin_not_configured"
+
+    if user_id is not None:
+        user_telegram = get_telegram_integration(user_id)
+        if user_telegram and str(user_telegram.get("telegram_chat_id") or "").strip() == str(chat_id).strip():
+            return True, "telegram_admin_same_as_user"
 
     user_label = str(user_id or "unknown")
     if user_id is not None:

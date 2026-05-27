@@ -13,7 +13,7 @@ from database.db import (
     mark_pending_telegram_summary_sent,
 )
 from services.audit_service import enqueue_monthly_audit
-from services.telegram_service import send_admin_copy, send_telegram_message
+from services.telegram_service import format_all_projects_seo_summary, send_admin_copy, send_telegram_message
 
 
 AUDIT_TYPE = "monthly"
@@ -208,14 +208,7 @@ def build_telegram_summary(user_id, period="daily"):
     if not sites:
         return {"success": False, "message": ADD_FIRST_SITE_MESSAGE, "text": ADD_FIRST_SITE_MESSAGE}
 
-    period_label = {
-        "daily": "день",
-        "weekly": "неделю",
-        "monthly": "месяц",
-    }.get(period, "день")
-
-    blocks = [_project_block(user_id, site) for site in sites]
-    text = f"SEO-сводка за {period_label}\n\n" + "\n---\n".join(blocks)
+    text = format_all_projects_seo_summary(user_id)
     return {"success": True, "message": "Сводка сформирована.", "text": text}
 
 
