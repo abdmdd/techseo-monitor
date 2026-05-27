@@ -260,8 +260,12 @@ def automatic_monitoring_block(user_id):
         "weekly": "раз в неделю",
     }
     current_frequency = settings.get("frequency") if settings.get("frequency") in frequency_options else "every_3_days"
+    telegram_token = generate_telegram_connect_token(user_id)
+    telegram_url = f"https://t.me/techseo_monitor_alert_bot?start=connect_{telegram_token}"
+    telegram_command = f"/start connect_{telegram_token}"
 
     st.markdown("#### Автоматический мониторинг")
+    st.info("Нажмите кнопку, откройте бота и нажмите Start. Затем вернитесь сюда и нажмите Проверить подключение.")
     if telegram_connected:
         username = telegram.get("telegram_username")
         account_label = f"@{username}" if username else _mask_chat_id(telegram.get("telegram_chat_id"))
@@ -269,18 +273,21 @@ def automatic_monitoring_block(user_id):
         st.caption(f"chat_id: {_mask_chat_id(telegram.get('telegram_chat_id'))}")
     else:
         st.warning("Подключите Telegram, чтобы получать сводки.")
+        st.caption("Если Telegram не показал кнопку Start, отправьте боту команду ниже:")
+        st.code(telegram_command, language=None)
 
     tg_col1, tg_col2, tg_col3 = st.columns(3)
     with tg_col1:
-        st.link_button("Подключить Telegram", _telegram_connect_url(user_id), use_container_width=True)
+        st.link_button("Подключить Telegram", telegram_url, use_container_width=True)
     with tg_col2:
         if st.button("Проверить подключение Telegram", use_container_width=True):
             result = sync_telegram_updates()
             if result.get("ok") and get_telegram_integration(user_id):
-                st.success("Telegram подключён.")
+                st.success("Telegram подключён")
                 st.rerun()
             elif result.get("ok"):
-                st.info("Подключение пока не найдено. Нажмите Start в боте и попробуйте ещё раз.")
+                st.warning("Мы пока не получили сообщение от бота. Откройте бота, нажмите Start или отправьте команду ниже, затем повторите проверку.")
+                st.code(telegram_command, language=None)
             else:
                 st.warning(result.get("message", "Не удалось проверить подключение Telegram."))
     with tg_col3:

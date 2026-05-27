@@ -516,10 +516,17 @@ def sync_telegram_updates():
     for update in payload.get("result", []):
         message = update.get("message") or {}
         text = (message.get("text") or "").strip()
-        if not text.startswith("/start connect_"):
+        parts = text.split()
+        if not parts or not parts[0].startswith("/start"):
             continue
 
-        token_value = text.split("connect_", 1)[1].split()[0].strip()
+        token_part = next((part for part in parts[1:] if part.startswith("connect_")), "")
+        if not token_part and "connect_" in text:
+            token_part = "connect_" + text.split("connect_", 1)[1].split()[0].strip()
+        if not token_part.startswith("connect_"):
+            continue
+
+        token_value = token_part.split("connect_", 1)[1].strip()
         user_id = verify_telegram_connect_token(token_value)
         if not user_id:
             continue
