@@ -366,6 +366,15 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS competitor_analysis_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
     migrate_sites_unique_url(cursor)
     migrate_yandex_integrations_nullable_site(cursor)
 
@@ -450,6 +459,10 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_serp_results_cache_lookup
         ON serp_results_cache(query, city, own_site, created_at)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_competitor_analysis_usage_user_date
+        ON competitor_analysis_usage(user_id, created_at)
     """)
 
     conn.commit()
@@ -1194,6 +1207,38 @@ def get_serp_results_cache(query, city, own_site, max_age_days=7):
         "results": results,
         "created_at": row[2],
     }
+
+
+def get_today_competitor_analysis_count(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*)
+        FROM competitor_analysis_usage
+        WHERE
+            user_id = ?
+            AND date(created_at, 'localtime') = date('now', 'localtime')
+    """, (user_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return int(count or 0)
+
+
+def can_run_competitor_analysis(user_id):
+    return get_today_competitor_analysis_count(user_id) < 3
+
+
+def increment_competitor_analysis_usage(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO competitor_analysis_usage (user_id)
+        VALUES (?)
+    """, (user_id,))
+    conn.commit()
+    usage_id = cursor.lastrowid
+    conn.close()
+    return usage_id
 
 
 def get_site_by_id(site_id, user_id=None):

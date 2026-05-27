@@ -1,14 +1,12 @@
 import re
-from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
-import requests
 from bs4 import BeautifulSoup
 
 from database.db import get_serp_results_cache, save_serp_results_cache
+from services.yandex_search_service import search_yandex_serp
 
 
-YANDEX_SEARCH_URL = "https://yandex.ru/search/?text={query}"
-SERP_TIMEOUT = 10
 MAX_SERP_LIMIT = 10
 
 BLOCKED_DOMAINS = {
@@ -179,11 +177,14 @@ def search_competitors(query, city=None, own_site=None, limit=10):
     if not search_text:
         return {
             "ok": False,
-            "source": "none",
+            "source": "error",
             "from_cache": False,
             "message": "Введите поисковый запрос для поиска конкурентов.",
             "results": [],
             "raw_count": 0,
+            "error": "Введите поисковый запрос для поиска конкурентов.",
+            "status_code": None,
+            "raw_preview": "",
         }
 
     cache = get_serp_results_cache(normalized_query, normalized_city, normalized_own_site, max_age_days=7)
@@ -197,53 +198,13 @@ def search_competitors(query, city=None, own_site=None, limit=10):
             "results": cached_results[:safe_limit],
             "raw_count": cache["results"].get("raw_count", len(cached_results)),
             "cached_at": cache.get("created_at"),
+            "error": None,
+            "status_code": None,
+            "raw_preview": "",
         }
 
-    url = YANDEX_SEARCH_URL.format(query=quote_plus(search_text))
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0 Safari/537.36"
-        ),
-        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-    }
-
-    try:
-        response = requests.get(url, headers=headers, timeout=SERP_TIMEOUT)
-    except requests.RequestException:
-        return {
-            "ok": False,
-            "source": "network",
-            "from_cache": False,
-            "message": "Не удалось получить выдачу. Возможно, поисковик временно ограничил запрос. Попробуйте позже или введите конкурентов вручную.",
-            "results": [],
-            "raw_count": 0,
-        }
-
-    if response.status_code in (403, 429) or _looks_like_captcha(response.text):
-        return {
-            "ok": False,
-            "source": "blocked",
-            "from_cache": False,
-            "message": "Не удалось получить выдачу. Возможно, поисковик временно ограничил запрос. Попробуйте позже или введите конкурентов вручную.",
-            "results": [],
-            "raw_count": 0,
-            "status_code": response.status_code,
-        }
-
-    if response.status_code >= 400:
-        return {
-            "ok": False,
-            "source": "http",
-            "from_cache": False,
-            "message": "Поисковик не вернул доступную выдачу. Попробуйте позже или введите конкурентов вручную.",
-            "results": [],
-            "raw_count": 0,
-            "status_code": response.status_code,
-        }
-
-    raw_results = extract_serp_results(response.text)
+    api_result = search_yandex_serp(normalized_query, city=normalized_city, limit=safe_limit)
+    raw_results = api_result.get("results", [])
     competitors = filter_competitors(raw_results, normalized_own_site)[:safe_limit]
 
     payload = {
@@ -256,10 +217,12 @@ def search_competitors(query, city=None, own_site=None, limit=10):
 
     return {
         "ok": bool(competitors),
-        "source": "yandex",
+        "source": "api" if competitors else api_result.get("source", "error"),
         "from_cache": False,
-        "message": f"Найдено {len(competitors)} конкурентов." if competitors else "Не удалось получить выдачу. Возможно, поисковик временно ограничил запрос. Попробуйте позже или введите конкурентов вручную.",
+        "message": f"Найдено {len(competitors)} конкурентов." if competitors else api_result.get("message", "Не удалось получить выдачу. Попробуйте позже или введите конкурентов вручную."),
         "results": competitors,
         "raw_count": len(raw_results),
-        "status_code": response.status_code,
+        "status_code": api_result.get("status_code"),
+        "error": None if competitors else api_result.get("error"),
+        "raw_preview": api_result.get("raw_preview", ""),
     }

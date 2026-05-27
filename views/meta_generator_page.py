@@ -1,14 +1,20 @@
 from html import escape
+import json
 import time
 
 import pandas as pd
 import streamlit as st
 
 from database.db import (
+    can_run_competitor_analysis,
+    get_serp_results_cache,
+    get_today_competitor_analysis_count,
     get_latest_ai_audit_insight,
     get_latest_audit_job,
     get_yandex_traffic_snapshots,
+    increment_competitor_analysis_usage,
     save_ai_audit_insight,
+    save_serp_results_cache,
 )
 from services.ai_service import (
     generate_ai_audit_insight,
@@ -17,7 +23,8 @@ from services.ai_service import (
     yandex_gpt_available,
 )
 from services.competitor_crawler_service import crawl_competitor_page
-from services.serp_crawler_service import normalize_domain, search_competitors
+from services.serp_crawler_service import filter_competitors, normalize_domain
+from services.yandex_search_service import search_yandex_serp
 from views.auth_page import require_user_id
 from views.cached_data import cached_get_sites
 
@@ -392,6 +399,10 @@ def _show_ai_seo_assistant(user_id):
 
 
 def _show_competitor_analysis(user_id):
+    usage_count = get_today_competitor_analysis_count(user_id)
+    remaining_requests = max(0, 3 - usage_count)
+    st.caption(f"Сегодня осталось: {remaining_requests} из 3")
+
     sites = cached_get_sites(user_id=user_id)
     site_labels = [""] + [f"{site[1]} · {site[2]}" for site in sites]
     selected = st.selectbox("Ваш сайт", site_labels, index=0, key="ai_competitor_site")
@@ -426,8 +437,68 @@ def _show_competitor_analysis(user_id):
         }
 
         if not manual_items:
-            with st.spinner("Ищем конкурентов в выдаче..."):
-                serp_data = search_competitors(query, city=city, own_site=own_site, limit=10)
+            normalized_query = (query or "").strip()
+            normalized_city = (city or "").strip()
+            normalized_own_site = (own_site or "").strip()
+            cache = get_serp_results_cache(normalized_query, normalized_city, normalized_own_site, max_age_days=7)
+            if cache and isinstance(cache.get("results"), dict):
+                cached_results = cache["results"].get("results", [])
+                serp_data = {
+                    "ok": bool(cached_results),
+                    "source": "cache",
+                    "from_cache": True,
+                    "message": "Результат загружен из кэша",
+                    "results": cached_results[:10],
+                    "raw_count": cache["results"].get("raw_count", len(cached_results)),
+                    "cached_at": cache.get("created_at"),
+                    "error": None,
+                    "status_code": None,
+                    "raw_preview": "",
+                }
+            elif not can_run_competitor_analysis(user_id):
+                serp_data = {
+                    "ok": False,
+                    "source": "error",
+                    "from_cache": False,
+                    "message": "Достигнут дневной лимит анализа конкурентов (3 запроса в день).",
+                    "results": [],
+                    "raw_count": 0,
+                    "error": "Достигнут дневной лимит анализа конкурентов (3 запроса в день).",
+                    "status_code": None,
+                    "raw_preview": "",
+                }
+            else:
+                with st.spinner("Поиск конкурентов через Yandex Search API..."):
+                    api_result = search_yandex_serp(query, city=city, limit=10)
+                    if api_result.get("request_sent"):
+                        increment_competitor_analysis_usage(user_id)
+                    filtered_results = filter_competitors(api_result.get("results", []), normalized_own_site)[:10]
+                    serp_data = {
+                        **api_result,
+                        "from_cache": False,
+                        "results": filtered_results,
+                        "raw_count": api_result.get("raw_count", len(api_result.get("results", []))),
+                        "message": (
+                            f"Найдено {len(filtered_results)} конкурентов."
+                            if filtered_results
+                            else api_result.get("message", "Не удалось получить выдачу.")
+                        ),
+                    }
+                    if api_result.get("ok") and not filtered_results:
+                        serp_data["ok"] = False
+                        serp_data["error"] = "После фильтрации не осталось релевантных конкурентов."
+                    if filtered_results:
+                        save_serp_results_cache(
+                            normalized_query,
+                            normalized_city,
+                            normalized_own_site,
+                            {
+                                "results": filtered_results,
+                                "raw_count": serp_data.get("raw_count", len(filtered_results)),
+                                "source": "api",
+                                "search_text": api_result.get("search_text"),
+                            },
+                        )
 
         if not serp_data.get("ok") or not serp_data.get("results"):
             st.session_state.ai_competitor_result = None
@@ -468,11 +539,25 @@ def _show_competitor_analysis(user_id):
 
     if serp_data:
         if serp_data.get("from_cache"):
-            st.info("Результат из кэша.")
+            st.info("Результат загружен из кэша")
+        elif serp_data.get("error") == "Достигнут дневной лимит анализа конкурентов (3 запроса в день).":
+            st.warning("Лимит запросов достигнут")
         elif serp_data.get("ok"):
-            st.success(f"Найдено {len(serp_data.get('results', []))} конкурентов.")
+            st.success(f"Найдено {len(serp_data.get('results', []))} конкурентов через Yandex Search API.")
         else:
             st.warning(serp_data.get("message", "Не удалось получить выдачу."))
+
+        with st.expander("Диагностика Yandex Search API", expanded=not bool(serp_data.get("results"))):
+            st.write({
+                "source": serp_data.get("source"),
+                "status_code": serp_data.get("status_code"),
+                "error": serp_data.get("error"),
+                "results_count": len(serp_data.get("results") or []),
+            })
+            if serp_data.get("raw_preview"):
+                st.code(serp_data.get("raw_preview"), language="text")
+            if not serp_data.get("results"):
+                st.info("Конкуренты не найдены. Проверьте запрос, город и настройки Yandex Search API или введите конкурентов вручную.")
 
         serp_rows = [
             {
@@ -486,7 +571,15 @@ def _show_competitor_analysis(user_id):
         ]
         if serp_rows:
             _section("SERP результаты", "Топ конкурентов из выдачи или ручного списка.")
-            st.dataframe(pd.DataFrame(serp_rows), use_container_width=True, hide_index=True)
+            serp_df = pd.DataFrame(serp_rows)
+            st.dataframe(serp_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Сохранить таблицу SERP",
+                serp_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="serp_competitors.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
     if basic_seo:
         _section("Basic SEO конкурентов", "Лёгкий обход только страницы из выдачи, без глубокого парсинга сайта.")
@@ -506,7 +599,7 @@ def _show_competitor_analysis(user_id):
     if not result:
         _empty_state(
             "Готово к поиску конкурентов",
-            "Введите сайт, запрос и город. Если выдачу получить не удастся, можно ввести конкурентов вручную и запустить анализ без SERP crawler.",
+            "Введите сайт, запрос и город. Если Yandex Search API не вернёт выдачу, можно ввести конкурентов вручную.",
         )
         return
 
@@ -515,9 +608,17 @@ def _show_competitor_analysis(user_id):
     else:
         st.warning(result.get("message", "Показана базовая структура анализа."))
 
+    st.download_button(
+        "Сохранить AI summary",
+        json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"),
+        file_name="competitor_ai_summary.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
     st.info(result.get("mvp_notice", "Это MVP-анализ на основе SERP и basic SEO данных."))
 
-    _section("Основные конкуренты", "Если список не был введён вручную, это результаты SERP crawler.")
+    _section("Основные конкуренты", "Если список не был введён вручную, это результаты Yandex Search API.")
     competitors_rows = [{"Конкурент": item} for item in result.get("competitors", [])]
     if competitors_rows:
         st.dataframe(pd.DataFrame(competitors_rows), use_container_width=True, hide_index=True)

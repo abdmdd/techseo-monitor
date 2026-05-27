@@ -787,7 +787,7 @@ def generate_competitor_analysis(own_site, query, city="", competitors=""):
 Наш сайт: {clean_site or "не указан"}
 Поисковый запрос: {clean_query or "не указан"}
 Город: {clean_city or "не указан"}
-Режим: {"ручные конкуренты" if manual_mode else "SERP crawler"}
+Режим: {"ручные конкуренты" if manual_mode else "Yandex Search API"}
 Конкуренты:
 {json.dumps(competitor_list, ensure_ascii=False, default=str)}
 

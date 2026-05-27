@@ -83,6 +83,16 @@ YANDEX_GPT_TIMEOUT = float(os.getenv(
     "20"
 ))
 
+YANDEX_SEARCH_API_KEY = os.getenv(
+    "YANDEX_SEARCH_API_KEY",
+    ""
+)
+
+YANDEX_SEARCH_FOLDER_ID = os.getenv(
+    "YANDEX_SEARCH_FOLDER_ID",
+    ""
+)
+
 
 # ==================================================
 # GOOGLE
