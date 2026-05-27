@@ -12,6 +12,7 @@ from database.db import (
     get_latest_ai_audit_insight,
     get_latest_audit_job,
     get_yandex_traffic_snapshots,
+    increment_ai_feature_usage,
     increment_competitor_analysis_usage,
     save_ai_audit_insight,
     save_serp_results_cache,
@@ -659,7 +660,7 @@ def _show_competitor_analysis(user_id):
     _card("Вывод", result.get("conclusion"))
 
 
-def _show_text_check():
+def _show_text_check(user_id):
     source_text = st.text_area(
         "Текст для проверки",
         placeholder="Вставьте текст страницы, описания услуги, новости или SEO-блока...",
@@ -680,6 +681,7 @@ def _show_text_check():
     if st.button("Проверить текст", type="primary", use_container_width=True, key="ai_text_check_button"):
         with st.spinner("Проверяем текст через YandexGPT..."):
             st.session_state.ai_text_check_result = generate_text_check_analysis(source_text, tone, text_type)
+            increment_ai_feature_usage(user_id, "text_check")
 
     result = st.session_state.get("ai_text_check_result")
     if not result:
@@ -760,4 +762,4 @@ def show_meta_generator_page():
         _show_competitor_analysis(user_id)
 
     with tab_text:
-        _show_text_check()
+        _show_text_check(user_id)

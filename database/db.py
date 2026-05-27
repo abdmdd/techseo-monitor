@@ -375,6 +375,33 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_notification_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE,
+            daily_summary INTEGER NOT NULL DEFAULT 0,
+            weekly_summary INTEGER NOT NULL DEFAULT 1,
+            critical_only INTEGER NOT NULL DEFAULT 0,
+            notify_index_drop INTEGER NOT NULL DEFAULT 1,
+            notify_404_spike INTEGER NOT NULL DEFAULT 1,
+            notify_robots_change INTEGER NOT NULL DEFAULT 1,
+            notify_site_down INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ai_feature_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            feature TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
     migrate_sites_unique_url(cursor)
     migrate_yandex_integrations_nullable_site(cursor)
 
@@ -463,6 +490,10 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_competitor_analysis_usage_user_date
         ON competitor_analysis_usage(user_id, created_at)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ai_feature_usage_user_feature_date
+        ON ai_feature_usage(user_id, feature, created_at)
     """)
 
     conn.commit()
@@ -1239,6 +1270,151 @@ def increment_competitor_analysis_usage(user_id):
     usage_id = cursor.lastrowid
     conn.close()
     return usage_id
+
+
+DEFAULT_NOTIFICATION_SETTINGS = {
+    "daily_summary": False,
+    "weekly_summary": True,
+    "critical_only": False,
+    "notify_index_drop": True,
+    "notify_404_spike": True,
+    "notify_robots_change": True,
+    "notify_site_down": True,
+}
+
+
+def _notification_settings_row_to_dict(row):
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "daily_summary": bool(row[2]),
+        "weekly_summary": bool(row[3]),
+        "critical_only": bool(row[4]),
+        "notify_index_drop": bool(row[5]),
+        "notify_404_spike": bool(row[6]),
+        "notify_robots_change": bool(row[7]),
+        "notify_site_down": bool(row[8]),
+        "created_at": row[9],
+        "updated_at": row[10],
+    }
+
+
+def get_user_notification_settings(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            id,
+            user_id,
+            daily_summary,
+            weekly_summary,
+            critical_only,
+            notify_index_drop,
+            notify_404_spike,
+            notify_robots_change,
+            notify_site_down,
+            created_at,
+            updated_at
+        FROM user_notification_settings
+        WHERE user_id = ?
+        LIMIT 1
+    """, (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    result = _notification_settings_row_to_dict(row)
+    if result:
+        return result
+    return {"id": None, "user_id": user_id, **DEFAULT_NOTIFICATION_SETTINGS, "created_at": None, "updated_at": None}
+
+
+def upsert_user_notification_settings(user_id, **settings):
+    values = {
+        key: int(bool(settings.get(key, DEFAULT_NOTIFICATION_SETTINGS[key])))
+        for key in DEFAULT_NOTIFICATION_SETTINGS
+    }
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO user_notification_settings
+        (
+            user_id,
+            daily_summary,
+            weekly_summary,
+            critical_only,
+            notify_index_drop,
+            notify_404_spike,
+            notify_robots_change,
+            notify_site_down
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            daily_summary = excluded.daily_summary,
+            weekly_summary = excluded.weekly_summary,
+            critical_only = excluded.critical_only,
+            notify_index_drop = excluded.notify_index_drop,
+            notify_404_spike = excluded.notify_404_spike,
+            notify_robots_change = excluded.notify_robots_change,
+            notify_site_down = excluded.notify_site_down,
+            updated_at = CURRENT_TIMESTAMP
+    """, (
+        user_id,
+        values["daily_summary"],
+        values["weekly_summary"],
+        values["critical_only"],
+        values["notify_index_drop"],
+        values["notify_404_spike"],
+        values["notify_robots_change"],
+        values["notify_site_down"],
+    ))
+    conn.commit()
+    conn.close()
+    return get_user_notification_settings(user_id)
+
+
+def get_today_ai_feature_usage_count(user_id, feature):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*)
+        FROM ai_feature_usage
+        WHERE
+            user_id = ?
+            AND feature = ?
+            AND date(created_at, 'localtime') = date('now', 'localtime')
+    """, (user_id, feature))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return int(count or 0)
+
+
+def increment_ai_feature_usage(user_id, feature):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO ai_feature_usage (user_id, feature)
+        VALUES (?, ?)
+    """, (user_id, feature))
+    conn.commit()
+    usage_id = cursor.lastrowid
+    conn.close()
+    return usage_id
+
+
+def get_today_ai_assistant_usage_count(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*)
+        FROM ai_audit_insights
+        WHERE
+            user_id = ?
+            AND date(created_at, 'localtime') = date('now', 'localtime')
+    """, (user_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return int(count or 0)
 
 
 def get_site_by_id(site_id, user_id=None):
