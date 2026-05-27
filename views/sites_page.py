@@ -13,11 +13,10 @@ from database.db import (
     mark_seo_monitoring_sent,
     upsert_seo_monitoring_settings,
 )
+from services.summary_service import send_telegram_summary
 from services.telegram_service import (
-    format_all_projects_seo_summary,
     generate_telegram_connect_token,
     send_admin_copy,
-    send_telegram_message,
     sync_telegram_updates,
 )
 from services.yandex_oauth_service import (
@@ -235,7 +234,7 @@ def render_yandex_site_matches(user_id, sites):
 
 
 def _next_monitoring_run(frequency):
-    days = 7 if frequency == "weekly" else 3
+    days = 7 if frequency == "weekly" else 1
     return (datetime.utcnow() + timedelta(days=days)).isoformat(timespec="seconds")
 
 
@@ -256,10 +255,10 @@ def automatic_monitoring_block(user_id):
     telegram = get_telegram_integration(user_id)
     telegram_connected = bool(telegram)
     frequency_options = {
-        "every_3_days": "раз в 3 дня",
+        "daily": "ежедневно",
         "weekly": "раз в неделю",
     }
-    current_frequency = settings.get("frequency") if settings.get("frequency") in frequency_options else "every_3_days"
+    current_frequency = settings.get("frequency") if settings.get("frequency") in frequency_options else "daily"
     telegram_token = generate_telegram_connect_token(user_id)
     telegram_url = f"https://t.me/techseo_monitor_alert_bot?start=connect_{telegram_token}"
     telegram_command = f"/start connect_{telegram_token}"
@@ -329,10 +328,10 @@ def automatic_monitoring_block(user_id):
     with col2:
         if st.button("Отправить тестовую сводку", disabled=not telegram_connected, use_container_width=True):
             with st.spinner("Собираем SEO-сводку по всем проектам..."):
-                message = format_all_projects_seo_summary(user_id)
-                ok, error = send_telegram_message(message, telegram.get("telegram_chat_id") if telegram else None)
+                result = send_telegram_summary(user_id, period=frequency, force_refresh=True)
+                message = result.get("text") or result.get("message")
                 send_admin_copy(message, user_id=user_id)
-            if ok:
+            if result.get("success"):
                 now_value = datetime.utcnow().isoformat(timespec="seconds")
                 current_settings = get_seo_monitoring_settings(user_id)
                 if not current_settings.get("id"):
@@ -348,10 +347,10 @@ def automatic_monitoring_block(user_id):
                     _next_monitoring_run(current_settings.get("frequency")) if current_settings.get("enabled") else current_settings.get("next_run_at"),
                 )
                 st.success("Тестовая Telegram-сводка отправлена.")
-            elif error == "telegram_not_configured":
+            elif result.get("error") == "telegram_not_configured":
                 st.warning("Добавьте TELEGRAM_BOT_TOKEN и подключите Telegram пользователя.")
             else:
-                st.warning("Не удалось отправить Telegram-сводку. Проверьте настройки бота и chat_id.")
+                st.warning(result.get("message") or "Не удалось отправить Telegram-сводку. Проверьте настройки бота и chat_id.")
 
     current_settings = get_seo_monitoring_settings(user_id)
     kv_card(
@@ -359,7 +358,7 @@ def automatic_monitoring_block(user_id):
         [
             ("Включено", "Да" if current_settings.get("enabled") else "Нет"),
             ("Telegram", "Подключён" if telegram_connected else "Не подключён"),
-            ("Периодичность", frequency_options.get(current_settings.get("frequency"), "раз в 3 дня")),
+            ("Периодичность", frequency_options.get(current_settings.get("frequency"), "ежедневно")),
             ("Последняя отправка", current_settings.get("last_run_at") or "ещё не было"),
             ("Следующая отправка", current_settings.get("next_run_at") or "не запланирована"),
         ],

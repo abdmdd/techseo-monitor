@@ -4,7 +4,6 @@ from tasks.celery_app import celery
 
 from database.db import (
     get_due_seo_monitoring_settings,
-    get_telegram_integration,
     mark_seo_monitoring_sent,
     update_audit_job,
 )
@@ -13,11 +12,12 @@ from services.audit_service import (
     run_quarterly_audit
 )
 from services.history_service import save_audit_history
-from services.telegram_service import format_all_projects_seo_summary, send_admin_copy, send_telegram_message
+from services.summary_service import send_telegram_summary
+from services.telegram_service import send_admin_copy
 
 
 def _next_monitoring_run(now, frequency):
-    days = 7 if frequency == "weekly" else 3
+    days = 7 if frequency == "weekly" else 1
     return (now + timedelta(days=days)).isoformat(timespec="seconds")
 
 
@@ -97,14 +97,10 @@ def send_scheduled_seo_summaries():
 
     for settings in get_due_seo_monitoring_settings(now_value):
         try:
-            message = format_all_projects_seo_summary(settings["user_id"])
-            telegram = get_telegram_integration(settings["user_id"])
-            user_ok = False
-            if telegram:
-                user_ok, _ = send_telegram_message(message, telegram.get("telegram_chat_id"))
-
-            admin_ok, _ = send_admin_copy(message, user_id=settings["user_id"])
-            if user_ok or admin_ok:
+            period = "weekly" if settings.get("frequency") == "weekly" else "daily"
+            result = send_telegram_summary(settings["user_id"], period=period, force_refresh=False)
+            admin_ok, _ = send_admin_copy(result.get("text") or result.get("message"), user_id=settings["user_id"])
+            if result.get("success") or admin_ok:
                 mark_seo_monitoring_sent(
                     settings["user_id"],
                     now_value,

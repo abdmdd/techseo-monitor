@@ -1,3 +1,4 @@
+import os
 from html import escape
 
 import streamlit as st
@@ -15,8 +16,9 @@ from database.db import (
     upsert_user_notification_settings,
 )
 from services.ai_service import yandex_gpt_available
+from services.summary_service import run_monthly_audit_for_all_users
 from services.yandex_oauth_service import get_yandex_integration_status
-from views.auth_page import require_user_id
+from views.auth_page import get_current_user, require_user_id
 
 
 AI_LIMITS = {
@@ -166,7 +168,7 @@ def _render_telegram_section(user_id):
         upsert_seo_monitoring_settings(
             user_id=user_id,
             enabled=False,
-            frequency=monitoring.get("frequency") or "every_3_days",
+            frequency=monitoring.get("frequency") or "daily",
             next_run_at=None,
         )
         st.success("Telegram отвязан, автосводки выключены.")
@@ -179,13 +181,8 @@ def _render_telegram_section(user_id):
 def _render_notifications_section(user_id):
     settings = get_user_notification_settings(user_id)
     fields = [
-        ("daily_summary", "Ежедневная сводка"),
-        ("weekly_summary", "Еженедельная сводка"),
-        ("critical_only", "Только критичные события"),
-        ("notify_index_drop", "Падение индексации"),
-        ("notify_404_spike", "Рост 404 ошибок"),
-        ("notify_robots_change", "Изменение robots.txt"),
-        ("notify_site_down", "Сайт недоступен"),
+        ("daily_summary", "Ежедневная Telegram-сводка"),
+        ("weekly_summary", "Еженедельная Telegram-сводка"),
     ]
 
     st.markdown('<div class="ts-settings-section">', unsafe_allow_html=True)
@@ -244,6 +241,42 @@ def _render_integrations_section(user_id):
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def _admin_tools_enabled():
+    if str(os.getenv("ENABLE_ADMIN_TOOLS", "")).strip().lower() in ("1", "true", "yes", "on"):
+        return True
+
+    user = get_current_user() or {}
+    return str(user.get("role", "")).lower() == "admin"
+
+
+def _render_admin_tools_section():
+    if not _admin_tools_enabled():
+        return
+
+    st.markdown('<div class="ts-settings-section">', unsafe_allow_html=True)
+    st.markdown("### Служебные инструменты")
+    st.markdown(
+        '<div class="ts-settings-muted">Кнопка доступна только администратору или при ENABLE_ADMIN_TOOLS=true.</div>',
+        unsafe_allow_html=True,
+    )
+
+    if st.button("Запустить ежемесячный аудит для всех", type="primary", use_container_width=True):
+        with st.spinner("Запускаем ежемесячный аудит по всем пользователям и сайтам..."):
+            stats = run_monthly_audit_for_all_users()
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Пользователей", stats.get("users_processed", 0))
+        with col2:
+            st.metric("Сайтов проверено", stats.get("projects_checked", 0))
+        with col3:
+            st.metric("Аудитов создано", stats.get("audits_created", 0))
+        with col4:
+            st.metric("Ошибок", stats.get("errors_count", 0))
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def show_settings_page():
     user_id = require_user_id()
     _inject_settings_styles()
@@ -263,5 +296,6 @@ def show_settings_page():
 
     _render_telegram_section(user_id)
     _render_notifications_section(user_id)
+    _render_admin_tools_section()
     _render_ai_limits_section(user_id)
     _render_integrations_section(user_id)

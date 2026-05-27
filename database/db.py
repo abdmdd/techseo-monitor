@@ -3,12 +3,21 @@ import sqlite3
 from pathlib import Path
 
 from config.settings import SQLITE_DB_PATH
+from database.database import (
+    PostgresConnectionAdapter,
+    get_default_cms_blocks,
+    init_sqlalchemy_database,
+    is_postgres,
+)
 
 
 DB_PATH = Path(SQLITE_DB_PATH)
 
 
 def get_connection():
+    if is_postgres():
+        return PostgresConnectionAdapter()
+
     DB_PATH.parent.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON")
@@ -155,6 +164,10 @@ def migrate_yandex_integrations_nullable_site(cursor):
 
 
 def init_db():
+    if is_postgres():
+        init_sqlalchemy_database(seed_demo=True)
+        return
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -320,7 +333,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL UNIQUE,
             enabled INTEGER NOT NULL DEFAULT 0,
-            frequency TEXT NOT NULL DEFAULT 'every_3_days',
+            frequency TEXT NOT NULL DEFAULT 'daily',
             last_run_at TEXT,
             next_run_at TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -399,6 +412,30 @@ def init_db():
             feature TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS site_pages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            meta_title TEXT,
+            meta_description TEXT,
+            content TEXT NOT NULL DEFAULT '',
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cms_blocks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -495,9 +532,131 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_ai_feature_usage_user_feature_date
         ON ai_feature_usage(user_id, feature, created_at)
     """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_site_pages_slug ON site_pages(slug)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cms_blocks_key ON cms_blocks(key)")
 
     conn.commit()
+    seed_sqlite_demo_pages(conn)
+    seed_sqlite_demo_blocks(conn)
     conn.close()
+
+
+def seed_sqlite_demo_pages(conn):
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM site_pages")
+    if cursor.fetchone()[0]:
+        return
+
+    pages = [
+        (
+            "home",
+            "TechSEO Monitor",
+            "TechSEO Monitor - SEO platform",
+            "Technical SEO monitoring platform for audits, alerts and reports.",
+            "<p>Welcome to TechSEO Monitor. Manage audits, monitor technical SEO and publish simple pages from the CMS.</p>",
+        ),
+        (
+            "about",
+            "About TechSEO Monitor",
+            "About TechSEO Monitor",
+            "Learn more about the TechSEO Monitor platform.",
+            "<p>TechSEO Monitor helps teams keep technical SEO issues visible and actionable.</p>",
+        ),
+        (
+            "contacts",
+            "Contacts",
+            "Contacts - TechSEO Monitor",
+            "Contact information for TechSEO Monitor.",
+            "<p>Use this page to publish contact details for your team.</p>",
+        ),
+    ]
+    cursor.executemany("""
+        INSERT INTO site_pages (slug, title, meta_title, meta_description, content)
+        VALUES (?, ?, ?, ?, ?)
+    """, pages)
+    conn.commit()
+
+
+def seed_sqlite_demo_blocks(conn):
+    cursor = conn.cursor()
+    for key, title, content in get_default_cms_blocks():
+        cursor.execute("""
+            INSERT OR IGNORE INTO cms_blocks (key, title, content)
+            VALUES (?, ?, ?)
+        """, (key, title, content))
+    conn.commit()
+
+
+def _cms_block_row_to_dict(row):
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "key": row[1],
+        "title": row[2],
+        "content": row[3],
+        "updated_at": row[4],
+    }
+
+
+def get_cms_block(key, default=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, key, title, content, updated_at
+        FROM cms_blocks
+        WHERE key = ?
+        LIMIT 1
+    """, (key,))
+    row = cursor.fetchone()
+    conn.close()
+    block = _cms_block_row_to_dict(row)
+    return block["content"] if block else default
+
+
+def set_cms_block(key, title, content):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO cms_blocks (key, title, content, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET
+            title = excluded.title,
+            content = excluded.content,
+            updated_at = CURRENT_TIMESTAMP
+    """, (key, title, content))
+    conn.commit()
+    conn.close()
+    return get_cms_block(key)
+
+
+def update_cms_block(key, title, content):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE cms_blocks
+        SET title = ?, content = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE key = ?
+    """, (title, content, key))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    if not affected:
+        set_cms_block(key, title, content)
+    return get_cms_block(key)
+
+
+def get_all_cms_blocks():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, key, title, content, updated_at
+        FROM cms_blocks
+        ORDER BY key
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [_cms_block_row_to_dict(row) for row in rows]
 
 
 def _audit_job_row_to_dict(row):
@@ -750,7 +909,8 @@ def create_user(email, password_hash, name=""):
         """, (name.strip(), email.strip().lower(), password_hash))
         conn.commit()
         user_id = cursor.lastrowid
-    except sqlite3.IntegrityError:
+    except Exception:
+        conn.rollback()
         user_id = None
 
     conn.close()
@@ -959,7 +1119,7 @@ def get_seo_monitoring_settings(user_id):
         "id": None,
         "user_id": user_id,
         "enabled": False,
-        "frequency": "every_3_days",
+        "frequency": "daily",
         "last_run_at": None,
         "next_run_at": None,
         "created_at": None,
@@ -968,7 +1128,7 @@ def get_seo_monitoring_settings(user_id):
 
 
 def upsert_seo_monitoring_settings(user_id, enabled, frequency, next_run_at=None):
-    normalized_frequency = frequency if frequency in ("every_3_days", "weekly") else "every_3_days"
+    normalized_frequency = frequency if frequency in ("daily", "every_3_days", "weekly") else "daily"
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -989,13 +1149,27 @@ def upsert_seo_monitoring_settings(user_id, enabled, frequency, next_run_at=None
             updated_at = CURRENT_TIMESTAMP
     """, (
         user_id,
-        1 if enabled else 0,
+        bool(enabled),
         normalized_frequency,
         next_run_at,
     ))
     conn.commit()
     conn.close()
     return get_seo_monitoring_settings(user_id)
+
+
+def get_users_with_sites():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT DISTINCT user_id
+        FROM sites
+        WHERE user_id IS NOT NULL
+        ORDER BY user_id
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
 
 
 def get_due_seo_monitoring_settings(now_value):
@@ -1330,8 +1504,9 @@ def get_user_notification_settings(user_id):
 
 
 def upsert_user_notification_settings(user_id, **settings):
+    existing = get_user_notification_settings(user_id)
     values = {
-        key: int(bool(settings.get(key, DEFAULT_NOTIFICATION_SETTINGS[key])))
+        key: bool(settings[key]) if key in settings else bool(existing.get(key, DEFAULT_NOTIFICATION_SETTINGS[key]))
         for key in DEFAULT_NOTIFICATION_SETTINGS
     }
     conn = get_connection()
