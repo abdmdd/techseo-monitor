@@ -1,4 +1,5 @@
 from html import escape
+import time
 
 import pandas as pd
 import streamlit as st
@@ -15,6 +16,8 @@ from services.ai_service import (
     generate_text_check_analysis,
     yandex_gpt_available,
 )
+from services.competitor_crawler_service import crawl_competitor_page
+from services.serp_crawler_service import normalize_domain, search_competitors
 from views.auth_page import require_user_id
 from views.cached_data import cached_get_sites
 
@@ -403,15 +406,107 @@ def _show_competitor_analysis(user_id):
         height=160,
     )
 
-    if st.button("Сформировать анализ", type="primary", use_container_width=True, key="ai_competitor_button"):
-        with st.spinner("Сравниваем конкурентов через YandexGPT..."):
-            st.session_state.ai_competitor_result = generate_competitor_analysis(own_site, query, city, competitors)
+    if st.button("Найти конкурентов и проанализировать", type="primary", use_container_width=True, key="ai_competitor_button"):
+        manual_items = [item.strip() for item in competitors.replace(",", "\n").splitlines() if item.strip()]
+
+        serp_data = {
+            "ok": True,
+            "from_cache": False,
+            "message": "Используются конкуренты, введённые вручную.",
+            "results": [
+                {
+                    "position": index,
+                    "domain": normalize_domain(item),
+                    "url": item if item.startswith(("http://", "https://")) else f"https://{item}",
+                    "title": "",
+                    "snippet": "Введено вручную",
+                }
+                for index, item in enumerate(manual_items, start=1)
+            ],
+        }
+
+        if not manual_items:
+            with st.spinner("Ищем конкурентов в выдаче..."):
+                serp_data = search_competitors(query, city=city, own_site=own_site, limit=10)
+
+        if not serp_data.get("ok") or not serp_data.get("results"):
+            st.session_state.ai_competitor_result = None
+            st.session_state.ai_competitor_serp = serp_data
+            st.session_state.ai_competitor_basic_seo = []
+            return
+
+        basic_seo = []
+        progress = st.progress(0, text="Собираем basic SEO по конкурентам...")
+        for index, item in enumerate(serp_data.get("results", [])[:10], start=1):
+            basic = crawl_competitor_page(item.get("url", ""))
+            basic.update({
+                "position": item.get("position", index),
+                "serp_title": item.get("title", ""),
+                "serp_snippet": item.get("snippet", ""),
+            })
+            basic_seo.append(basic)
+            progress.progress(index / max(1, len(serp_data.get("results", [])[:10])), text=f"Собираем basic SEO: {index}/{len(serp_data.get('results', [])[:10])}")
+            if index < len(serp_data.get("results", [])[:10]):
+                time.sleep(1)
+        progress.empty()
+
+        competitors_payload = []
+        for serp_item, basic in zip(serp_data.get("results", [])[:10], basic_seo):
+            competitors_payload.append({
+                **serp_item,
+                "basic_seo": basic,
+            })
+
+        with st.spinner("Формируем AI-анализ конкурентов..."):
+            st.session_state.ai_competitor_result = generate_competitor_analysis(own_site, query, city, competitors_payload)
+            st.session_state.ai_competitor_serp = serp_data
+            st.session_state.ai_competitor_basic_seo = basic_seo
 
     result = st.session_state.get("ai_competitor_result")
+    serp_data = st.session_state.get("ai_competitor_serp")
+    basic_seo = st.session_state.get("ai_competitor_basic_seo") or []
+
+    if serp_data:
+        if serp_data.get("from_cache"):
+            st.info("Результат из кэша.")
+        elif serp_data.get("ok"):
+            st.success(f"Найдено {len(serp_data.get('results', []))} конкурентов.")
+        else:
+            st.warning(serp_data.get("message", "Не удалось получить выдачу."))
+
+        serp_rows = [
+            {
+                "Позиция": item.get("position"),
+                "Домен": item.get("domain"),
+                "Title": item.get("title"),
+                "Snippet": item.get("snippet"),
+                "URL": item.get("url"),
+            }
+            for item in serp_data.get("results", [])
+        ]
+        if serp_rows:
+            _section("SERP результаты", "Топ конкурентов из выдачи или ручного списка.")
+            st.dataframe(pd.DataFrame(serp_rows), use_container_width=True, hide_index=True)
+
+    if basic_seo:
+        _section("Basic SEO конкурентов", "Лёгкий обход только страницы из выдачи, без глубокого парсинга сайта.")
+        for item in basic_seo:
+            with st.expander(f"{item.get('position')}. {item.get('domain')} · {item.get('fetch_status')}", expanded=False):
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    _card("Title", item.get("title"))
+                    _card("Description", item.get("description"))
+                    _card("H1", item.get("h1"))
+                with col_b:
+                    _card("H2", item.get("h2_count"))
+                    _card("Длина контента", item.get("content_length"))
+                    _card("Коммерческие слова", ", ".join(item.get("commercial_words_found") or []) or "не найдены")
+                    _card("Коммерческие элементы", f"цены: {'да' if item.get('has_price_words') else 'нет'}, контакты: {'да' if item.get('has_contact_words') else 'нет'}, FAQ: {'да' if item.get('has_faq_words') else 'нет'}")
+
     if not result:
         _empty_state(
-            "MVP без настоящего SERP-парсера",
-            "Введите сайт, запрос и город. Если конкурентов не указать вручную, AI сформирует предполагаемый список для первичной SEO-гипотезы.",
+            "Готово к поиску конкурентов",
+            "Введите сайт, запрос и город. Если выдачу получить не удастся, можно ввести конкурентов вручную и запустить анализ без SERP crawler.",
         )
         return
 
@@ -420,9 +515,9 @@ def _show_competitor_analysis(user_id):
     else:
         st.warning(result.get("message", "Показана базовая структура анализа."))
 
-    st.info(result.get("mvp_notice", "Это MVP-анализ: настоящий SERP-парсер пока не подключён."))
+    st.info(result.get("mvp_notice", "Это MVP-анализ на основе SERP и basic SEO данных."))
 
-    _section("Основные конкуренты", "Если список не был введён вручную, это предполагаемые конкуренты для первичного анализа.")
+    _section("Основные конкуренты", "Если список не был введён вручную, это результаты SERP crawler.")
     competitors_rows = [{"Конкурент": item} for item in result.get("competitors", [])]
     if competitors_rows:
         st.dataframe(pd.DataFrame(competitors_rows), use_container_width=True, hide_index=True)

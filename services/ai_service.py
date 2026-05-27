@@ -684,20 +684,6 @@ def generate_ai_audit_insight(audit_result, site_info):
     return _normalize_ai_insight(data, fallback)
 
 
-def _guess_competitors(query, city):
-    clean_query = (query or "услуга").strip()
-    clean_city = (city or "").strip()
-    city_suffix = f" {clean_city}" if clean_city else ""
-    bases = [
-        "лидер рынка",
-        "официальный сайт",
-        "каталог услуг",
-        "рейтинг компаний",
-        "локальный поставщик",
-    ]
-    return [f"{clean_query}{city_suffix} - {base}" for base in bases]
-
-
 def _normalize_competitor_analysis(data, fallback):
     if not isinstance(data, dict):
         return fallback
@@ -729,20 +715,31 @@ def generate_competitor_analysis(own_site, query, city="", competitors=""):
     clean_site = (own_site or "").strip()
     clean_query = (query or "").strip()
     clean_city = (city or "").strip()
-    clean_competitors = (competitors or "").strip()
-    manual_mode = bool(clean_competitors)
-    competitor_list = (
-        [item.strip() for item in clean_competitors.replace(",", "\n").splitlines() if item.strip()]
-        if manual_mode else
-        _guess_competitors(clean_query, clean_city)
-    )
+    if isinstance(competitors, list):
+        competitor_list = competitors
+        manual_mode = False
+        clean_competitors = json.dumps(competitors, ensure_ascii=False, default=str)
+    else:
+        clean_competitors = (competitors or "").strip()
+        manual_mode = bool(clean_competitors)
+        competitor_list = (
+            [{"url": item.strip(), "domain": item.strip()} for item in clean_competitors.replace(",", "\n").splitlines() if item.strip()]
+            if manual_mode else
+            []
+        )
+
+    fallback_competitors = [
+        item.get("domain") or item.get("url") or item.get("title", "")
+        for item in competitor_list
+        if isinstance(item, dict)
+    ]
 
     fallback = {
         "ok": False,
         "source": "fallback",
         "message": "YandexGPT недоступен или вернул неструктурированный ответ. Показан безопасный MVP-анализ.",
-        "mvp_notice": "Это MVP-анализ: настоящий SERP-парсер пока не подключён. Если конкуренты не введены вручную, список является предполагаемым и нужен для первичной SEO-гипотезы.",
-        "competitors": competitor_list,
+        "mvp_notice": "Это MVP-анализ на основе найденной выдачи и базового SEO-обхода страниц конкурентов.",
+        "competitors": fallback_competitors,
         "competitor_strengths": [
             "Конкуренты могут быть сильнее за счёт более точного соответствия запросу в title и H1.",
             "У них может быть полнее раскрыт коммерческий интент: услуги, цены, контакты, отзывы, FAQ.",
@@ -772,7 +769,7 @@ def generate_competitor_analysis(own_site, query, city="", competitors=""):
             "Расширить текст ответами на частые вопросы и убрать общие формулировки.",
         ],
         "action_plan": [
-            "Собрать 5-10 реальных конкурентов из выдачи и заменить предполагаемый список.",
+            "Проверить список конкурентов из SERP и оставить релевантные коммерческие страницы.",
             "Сравнить title/H1/структуру каждого конкурента с нашей страницей.",
             "Обновить title, description, H1 и первый экран под основной запрос.",
             "Добавить коммерческие блоки: услуги, цены, отзывы, FAQ, контакты.",
@@ -784,15 +781,15 @@ def generate_competitor_analysis(own_site, query, city="", competitors=""):
     response = call_yandex_gpt(
         "Ты SEO-аналитик конкурентов. Верни только валидный JSON без markdown. Пиши подробно и прикладно для SEO-специалиста.",
         f"""
-Сделай MVP-анализ конкурентов.
-Если конкуренты предполагаемые, явно объясни ограничение: настоящего SERP-парсера пока нет.
+Сделай MVP-анализ конкурентов на основе SERP и basic SEO данных.
+Не выдумывай факты, которых нет в данных. Если по конкуренту нет данных страницы, так и укажи.
 
 Наш сайт: {clean_site or "не указан"}
 Поисковый запрос: {clean_query or "не указан"}
 Город: {clean_city or "не указан"}
-Режим: {"ручные конкуренты" if manual_mode else "предполагаемые конкуренты без SERP-парсера"}
+Режим: {"ручные конкуренты" if manual_mode else "SERP crawler"}
 Конкуренты:
-{json.dumps(competitor_list, ensure_ascii=False)}
+{json.dumps(competitor_list, ensure_ascii=False, default=str)}
 
 Верни JSON:
 {{

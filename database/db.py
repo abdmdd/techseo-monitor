@@ -343,6 +343,17 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS serp_results_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            query TEXT NOT NULL,
+            city TEXT,
+            own_site TEXT,
+            results_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     migrate_sites_unique_url(cursor)
     migrate_yandex_integrations_nullable_site(cursor)
 
@@ -419,6 +430,10 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_ai_audit_insights_latest
         ON ai_audit_insights(user_id, site_id, id)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_serp_results_cache_lookup
+        ON serp_results_cache(query, city, own_site, created_at)
     """)
 
     conn.commit()
@@ -1020,6 +1035,71 @@ def get_latest_ai_audit_insight(user_id, site_id):
         "audit_id": row[3],
         "summary": summary,
         "created_at": row[5],
+    }
+
+
+def save_serp_results_cache(query, city, own_site, results):
+    payload = results if isinstance(results, str) else json.dumps(results, ensure_ascii=False)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO serp_results_cache
+        (
+            query,
+            city,
+            own_site,
+            results_json
+        )
+        VALUES (?, ?, ?, ?)
+    """, (
+        (query or "").strip().lower(),
+        (city or "").strip().lower(),
+        (own_site or "").strip().lower(),
+        payload,
+    ))
+    conn.commit()
+    cache_id = cursor.lastrowid
+    conn.close()
+    return cache_id
+
+
+def get_serp_results_cache(query, city, own_site, max_age_days=7):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            id,
+            results_json,
+            created_at
+        FROM serp_results_cache
+        WHERE
+            query = ?
+            AND COALESCE(city, '') = ?
+            AND COALESCE(own_site, '') = ?
+            AND datetime(created_at) >= datetime('now', ?)
+        ORDER BY id DESC
+        LIMIT 1
+    """, (
+        (query or "").strip().lower(),
+        (city or "").strip().lower(),
+        (own_site or "").strip().lower(),
+        f"-{int(max_age_days)} days",
+    ))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    try:
+        results = json.loads(row[1])
+    except (TypeError, ValueError):
+        results = {}
+
+    return {
+        "id": row[0],
+        "results": results,
+        "created_at": row[2],
     }
 
 
