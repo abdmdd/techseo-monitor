@@ -8,6 +8,8 @@ services:
 
     container_name: techseo_streamlit
 
+    restart: unless-stopped
+
     env_file:
       - .env
 
@@ -30,6 +32,8 @@ services:
     build: .
 
     container_name: techseo_api
+
+    restart: unless-stopped
 
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
 
@@ -56,6 +60,8 @@ services:
 
     container_name: techseo_redis
 
+    restart: unless-stopped
+
     ports:
       - "6379:6379"
 
@@ -64,6 +70,8 @@ services:
     build: .
 
     container_name: techseo_celery
+
+    restart: unless-stopped
 
     command: celery -A tasks.audit_tasks worker --loglevel=info
 
@@ -86,6 +94,8 @@ services:
     build: .
 
     container_name: techseo_celery_beat
+
+    restart: unless-stopped
 
     command: celery -A tasks.audit_tasks beat --loglevel=info
 
